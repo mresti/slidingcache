@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -959,6 +960,10 @@ func FuzzStoreGetInvariants(f *testing.F) {
 		{1_700_000_000, []byte{0, 1, 2, 200, 3}},
 		{0, []byte{250, 251, 0, 5, 7}},
 		{-1_000, []byte{0, 60, 120, 1, 255}},
+		// Many duplicates of one bucket for one key, then an out-of-order
+		// duplicate of an earlier bucket, which exercises ordered insertion into
+		// an existing run of equal timestamps.
+		{1_700_000_000, []byte{128, 128, 128, 128, 128, 120, 120, 128, 132}},
 	}
 	for _, seed := range seeds {
 		f.Add(seed.base, seed.ops)
@@ -1030,4 +1035,85 @@ func fuzzOperand(base int64, op byte, precision int64) (string, int64) {
 	key := fmt.Sprintf("key-%d", op&fuzzKeyMask)
 	epoch := base + (int64(op>>3)-bucketOffsetBias)*precision + int64(op&fuzzKeyMask)
 	return key, epoch
+}
+
+func TestEntryInsertKeepsSortedWithDuplicates(t *testing.T) {
+	// In-order arrivals, repeats of the newest value, a repeat of a middle
+	// value, a backwards jump, and a repeat of the smallest value.
+	arrivals := []int64{10, 20, 30, 30, 30, 20, 15, 10, 40, 40, 5, 5, 25}
+
+	e := &entry{}
+	for i, timestamp := range arrivals {
+		e.insert(timestamp)
+
+		if !slices.IsSorted(e.timestamps) {
+			t.Fatalf("arrival %d (insert %d): timestamps = %v, want sorted", i, timestamp, e.timestamps)
+		}
+		if got, want := len(e.timestamps), i+1; got != want {
+			t.Fatalf("after inserting %d (arrival %d): len = %d, want %d", timestamp, i, got, want)
+		}
+	}
+}
+
+func TestEntryInsertDuplicateOfLastAppends(t *testing.T) {
+	e := &entry{timestamps: make([]int64, 0, 16)} // pre-grown so append cannot reallocate.
+	for _, timestamp := range []int64{1, 2, 3} {
+		e.insert(timestamp)
+	}
+	backingArray := &e.timestamps[0]
+
+	for range 3 {
+		e.insert(3)
+	}
+
+	if want := []int64{1, 2, 3, 3, 3, 3}; !slices.Equal(e.timestamps, want) {
+		t.Fatalf("timestamps = %v, want %v", e.timestamps, want)
+	}
+	if &e.timestamps[0] != backingArray {
+		t.Fatal("duplicate of the newest timestamp moved earlier elements, want a plain append")
+	}
+}
+
+func TestStoreSameBucketCountsEveryEvent(t *testing.T) {
+	const (
+		nanosPerSecond = int64(time.Second)
+		baseEpoch      = 1_700_000_000 * nanosPerSecond
+		halfSecond     = nanosPerSecond / 2
+		events         = 10_000
+	)
+	c := newTestCache(t, Config{Precision: time.Second, WindowSize: 300 * time.Second, EpochUnit: EpochInNanos})
+
+	for i := range events {
+		epoch := baseEpoch
+		if i%3 == 0 {
+			epoch += halfSecond // same Precision bucket, different nanosecond.
+		}
+		if got, want := c.Store(epoch, "hot"), i+1; got != want {
+			t.Fatalf("Store #%d = %d, want %d", i+1, got, want)
+		}
+	}
+	if got := c.Get(baseEpoch, "hot"); got != events {
+		t.Fatalf("Get = %d, want %d", got, events)
+	}
+
+	// Advancing past the window expires every same-bucket event at once.
+	afterWindow := baseEpoch + 301*nanosPerSecond
+	if got := c.Store(afterWindow, "hot"); got != 1 {
+		t.Fatalf("Store after the window = %d, want 1", got)
+	}
+	if got := c.Get(afterWindow, "hot"); got != 1 {
+		t.Fatalf("Get after the window = %d, want 1", got)
+	}
+
+	// The oldest bucket that survives the new cutoff (HW - WindowSize + 1s)
+	// still accepts events, duplicates and out-of-order arrivals included.
+	oldestAlive := baseEpoch + 2*nanosPerSecond
+	for i, epoch := range []int64{oldestAlive, oldestAlive, afterWindow, oldestAlive} {
+		if got, want := c.Store(epoch, "edge"), i+1; got != want {
+			t.Fatalf("Store(%d, edge) = %d, want %d", epoch, got, want)
+		}
+	}
+	if got := c.Get(afterWindow, "edge"); got != 4 {
+		t.Fatalf("Get(edge) = %d, want 4", got)
+	}
 }

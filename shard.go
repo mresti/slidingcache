@@ -49,7 +49,13 @@ func (s *shard) store(key string, timestamp int64, highWater *atomic.Int64, wind
 	}
 
 	e.prune(cutoff)
-	e.insert(timestamp)
+	// Spelled out instead of e.insert so that every piece inlines here; see
+	// entry.insert for why the combined function does not.
+	if e.inOrder(timestamp) {
+		e.appendInOrder(timestamp)
+	} else {
+		e.insertOutOfOrder(timestamp)
+	}
 	return len(e.timestamps)
 }
 
