@@ -18,8 +18,13 @@
 // Because HW is always greater than or equal to the epoch E of any individual
 // call (Store advances HW to at least E before evaluating liveness), this rule
 // is at least as inclusive as the intuitive "t >= E - WindowSize" window
-// anchored at the call itself. The count for a key is the number of its live
-// timestamps.
+// anchored at the call itself. The count for a key is the number of its events
+// with a live timestamp.
+//
+// Events that share a truncated timestamp are counted individually but stored
+// once, as a bucket holding their number, so a key's memory is bounded by
+// WindowSize/Precision buckets regardless of its event rate. A bucket is a
+// single 8-byte word packing the timestamp and the count.
 //
 // # Out-of-order and late events
 //
@@ -31,12 +36,20 @@
 //
 // # High-water mark hygiene
 //
-// The high-water mark only ever moves forward, and it is not clamped: a single
-// Store with an epoch in the wrong unit (for example nanoseconds passed to a
-// cache configured for milliseconds) advances HW to a far-future value and
-// makes every subsequent real event look late, permanently. There is no reset;
-// the only recovery is to build a new Cache with New. Callers must therefore
-// feed epochs of a single, consistent unit matching Config.EpochUnit.
+// The high-water mark only ever moves forward, and it is not clamped, so an
+// epoch in the wrong unit can drag the window forward with it. Store and Get
+// reject outright, with -1 and without touching HW, any epoch whose bucket
+// timestamp falls outside +-2^43 seconds (about +-278,000 years), which is the
+// range a bucket word represents. That absorbs the grossest unit mistake:
+// nanoseconds passed to a cache configured for seconds land near 1.7e18
+// seconds and are rejected rather than bricking the cache.
+//
+// A wrong unit that still lands inside the range is not detectable and remains
+// destructive: milliseconds passed to a cache configured for seconds advance HW
+// by a factor of a thousand, to the year 55,000, and make every subsequent real
+// event look late, permanently. There is no reset; the only recovery is to build
+// a new Cache with New. Callers must therefore feed epochs of a single,
+// consistent unit matching Config.EpochUnit.
 //
 // Negative epochs are supported: truncation to a Precision bucket rounds toward
 // negative infinity, so bucket boundaries are uniform on both sides of zero. A
@@ -68,14 +81,17 @@ type SlidingCache interface {
 	//
 	// If the event is already expired relative to the high-water mark
 	// (t <= HW - WindowSize after conversion and truncation), it is not stored
-	// and Store returns -1 to signal "late event, not stored".
+	// and Store returns -1 to signal "late event, not stored". Store also
+	// returns -1, without advancing the high-water mark, for an epoch whose
+	// bucket timestamp falls outside +-2^43 seconds (about +-278,000 years).
 	Store(epoch int64, keyInHash string) int
 	// Get returns the live count for keyInHash within the sliding window
 	// covering epoch. Returns 0 if the key does not exist.
 	//
 	// If epoch itself falls outside the live window (t <= HW - WindowSize after
-	// conversion and truncation), Get returns -1 to signal "queried epoch is
-	// outside the live window".
+	// conversion and truncation), or its bucket timestamp falls outside +-2^43
+	// seconds, Get returns -1 to signal "queried epoch is outside the live
+	// window".
 	Get(epoch int64, keyInHash string) int
 }
 
@@ -267,6 +283,14 @@ func applyOptions(c *Cache, opts []Option) error {
 // window (t <= HW - WindowSize).
 const lateEvent = -1
 
+// inBucketRange reports whether a bucket timestamp fits in the high bits of a
+// bucket word. Timestamps outside the range are rejected at the API boundary:
+// packing one would overflow into the sign bit, and letting it through would
+// also move the high-water mark to a value no real event can reach.
+func inBucketRange(timestamp int64) bool {
+	return timestamp >= minBucketTimestamp && timestamp <= maxBucketTimestamp
+}
+
 // noObservedHighWater is the high-water mark of a Cache on which Store has never
 // been called. It is the smallest mark whose cutoff is representable, so a fresh
 // cache treats every usable timestamp as alive while keeping the invariant that
@@ -279,8 +303,15 @@ func noObservedHighWater(windowSize int64) int64 {
 // returns the resulting live count for the key. An event that is already
 // expired relative to the current high-water mark is not stored; Store then
 // returns -1 to signal "late event, not stored".
+//
+// An epoch whose bucket timestamp is not representable (beyond about +-278,000
+// years from the epoch) is rejected the same way, before the high-water mark is
+// consulted, so it cannot drag the window with it.
 func (c *Cache) Store(epoch int64, keyInHash string) int {
 	timestamp := c.bucket(epoch)
+	if !inBucketRange(timestamp) {
+		return lateEvent
+	}
 	if timestamp <= cutoffFor(c.advanceHighWater(timestamp), c.windowSize) {
 		return lateEvent
 	}
@@ -291,10 +322,13 @@ func (c *Cache) Store(epoch int64, keyInHash string) int {
 
 // Get returns the live count for keyInHash within the sliding window covering
 // epoch, or 0 if the key does not exist. If epoch itself falls outside the live
-// window (t <= HW - WindowSize), Get returns -1. Get reads the current
-// high-water mark but does not advance it.
+// window (t <= HW - WindowSize), or its bucket timestamp is not representable,
+// Get returns -1. Get reads the current high-water mark but does not advance it.
 func (c *Cache) Get(epoch int64, keyInHash string) int {
 	timestamp := c.bucket(epoch)
+	if !inBucketRange(timestamp) {
+		return lateEvent
+	}
 	cutoff := c.cutoff()
 	if timestamp <= cutoff {
 		return lateEvent
