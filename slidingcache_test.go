@@ -631,23 +631,6 @@ func TestSweepCompactsShrunkenMap(t *testing.T) {
 	}
 }
 
-func TestEntryReallocatesLargeBackingArray(t *testing.T) {
-	e := &entry{}
-	for i := range int64(200) {
-		e.insert(i)
-	}
-	capBefore := cap(e.timestamps)
-
-	// Prune all but the last few, forcing a right-sized reallocation.
-	e.prune(196)
-	if len(e.timestamps) != 3 {
-		t.Fatalf("len after prune = %d, want 3", len(e.timestamps))
-	}
-	if cap(e.timestamps) >= capBefore {
-		t.Fatalf("cap after prune = %d, want smaller than %d", cap(e.timestamps), capBefore)
-	}
-}
-
 func TestWithHashFuncNilReturnsError(t *testing.T) {
 	c, err := New(secondsConfig(), WithHashFunc(nil))
 	if err == nil {
@@ -716,10 +699,10 @@ func secondsConfig() Config {
 	return Config{Precision: time.Second, WindowSize: 3600 * time.Second, EpochUnit: EpochInSeconds}
 }
 
-// timestampCount reports how many timestamps are physically retained for key,
-// expired ones included, or -1 when the key is absent. It distinguishes "counted
-// as zero" from "actually removed".
-func (c *Cache) timestampCount(key string) int {
+// retainedEvents reports how many events are physically retained for key,
+// those in expired buckets included, or -1 when the key is absent. It
+// distinguishes "counted as zero" from "actually removed".
+func (c *Cache) retainedEvents(key string) int {
 	s := c.shardFor(key)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -728,7 +711,23 @@ func (c *Cache) timestampCount(key string) int {
 	if !ok {
 		return -1
 	}
-	return len(e.timestamps)
+	return e.total
+}
+
+// bucketBreadth reports how many Precision buckets are physically retained for
+// key, expired ones included, or -1 when the key is absent. It is the memory the
+// key occupies, which the run-length encoding keeps independent of the event
+// rate.
+func (c *Cache) bucketBreadth(key string) int {
+	s := c.shardFor(key)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	e, ok := s.keys[key]
+	if !ok {
+		return -1
+	}
+	return len(e.buckets)
 }
 
 func TestRoundUpPow2(t *testing.T) {
@@ -786,8 +785,8 @@ func TestStoreRejectsTimestampExpiredByConcurrentHighWaterAdvance(t *testing.T) 
 	if got := c.shardFor("a").store("a", 950, &c.highWater, c.windowSize); got != lateEvent {
 		t.Fatalf("store under an advanced high-water mark = %d, want %d", got, lateEvent)
 	}
-	if got := c.timestampCount("a"); got != 1 {
-		t.Fatalf("retained timestamps = %d, want 1 (the late event must not be inserted)", got)
+	if got := c.retainedEvents("a"); got != 1 {
+		t.Fatalf("retained events = %d, want 1 (the late event must not be inserted)", got)
 	}
 	if got := c.Get(2000, "a"); got != 0 {
 		t.Fatalf("Get after the rejected store = %d, want 0", got)
@@ -856,14 +855,14 @@ func TestGetIsReadOnlyAndOnlySweepRemovesDeadKeys(t *testing.T) {
 	if got := c.Get(9000, "a"); got != 0 {
 		t.Fatalf("Get after expiry = %d, want 0", got)
 	}
-	if got := c.timestampCount("a"); got != 2 {
-		t.Fatalf("retained timestamps after Get = %d, want 2 (Get must not mutate)", got)
+	if got := c.retainedEvents("a"); got != 2 {
+		t.Fatalf("retained events after Get = %d, want 2 (Get must not mutate)", got)
 	}
 
 	c.sweep()
 
-	if got := c.timestampCount("a"); got != -1 {
-		t.Fatalf("key retained %d timestamps after sweep, want the key removed", got)
+	if got := c.retainedEvents("a"); got != -1 {
+		t.Fatalf("key retained %d events after sweep, want the key removed", got)
 	}
 	if got := c.Get(9000, "a"); got != 0 {
 		t.Fatalf("Get after sweep = %d, want 0", got)
@@ -871,8 +870,8 @@ func TestGetIsReadOnlyAndOnlySweepRemovesDeadKeys(t *testing.T) {
 }
 
 // TestStorePrunesExpiredPrefixOfTouchedKey pins that a Store drops the key's
-// dead timestamps before inserting, so a long-lived key does not accumulate
-// them between sweeps.
+// dead buckets before inserting, so a long-lived key does not accumulate them
+// between sweeps.
 func TestStorePrunesExpiredPrefixOfTouchedKey(t *testing.T) {
 	c := newTestCache(t, Config{Precision: time.Second, WindowSize: 60 * time.Second, EpochUnit: EpochInSeconds})
 
@@ -883,12 +882,12 @@ func TestStorePrunesExpiredPrefixOfTouchedKey(t *testing.T) {
 	if got := c.Store(9000, "a"); got != 1 {
 		t.Fatalf("Store after full expiry = %d, want 1", got)
 	}
-	if got := c.timestampCount("a"); got != 1 {
-		t.Fatalf("retained timestamps = %d, want 1 (expired prefix not pruned)", got)
+	if got := c.retainedEvents("a"); got != 1 {
+		t.Fatalf("retained events = %d, want 1 (expired prefix not pruned)", got)
 	}
 	// Pruning is confined to the touched key; an untouched one waits for a sweep.
-	if got := c.timestampCount("hw"); got != 1 {
-		t.Fatalf("retained timestamps for the untouched key = %d, want 1", got)
+	if got := c.retainedEvents("hw"); got != 1 {
+		t.Fatalf("retained events for the untouched key = %d, want 1", got)
 	}
 }
 
@@ -964,6 +963,10 @@ func FuzzStoreGetInvariants(f *testing.F) {
 		// duplicate of an earlier bucket, which exercises ordered insertion into
 		// an existing run of equal timestamps.
 		{1_700_000_000, []byte{128, 128, 128, 128, 128, 120, 120, 128, 132}},
+		// Repeats of an older bucket interleaved with newer ones, so an
+		// out-of-order arrival lands on a bucket that earlier prunes may already
+		// have dropped.
+		{1_700_000_000, []byte{128, 128, 136, 136, 144, 128, 120, 128}},
 	}
 	for _, seed := range seeds {
 		f.Add(seed.base, seed.ops)
@@ -1037,41 +1040,347 @@ func fuzzOperand(base int64, op byte, precision int64) (string, int64) {
 	return key, epoch
 }
 
-func TestEntryInsertKeepsSortedWithDuplicates(t *testing.T) {
-	// In-order arrivals, repeats of the newest value, a repeat of a middle
-	// value, a backwards jump, and a repeat of the smallest value.
+// TestEntryInvariantsHoldForMixedArrivals drives one entry through in-order
+// arrivals, repeats of the newest bucket, a repeat of a middle one, a backwards
+// jump, a repeat of the smallest, and a new smallest, asserting after every
+// arrival that the entry still satisfies the invariants documented on the type
+// and that no event was lost or duplicated.
+func TestEntryInvariantsHoldForMixedArrivals(t *testing.T) {
 	arrivals := []int64{10, 20, 30, 30, 30, 20, 15, 10, 40, 40, 5, 5, 25}
 
 	e := &entry{}
 	for i, timestamp := range arrivals {
 		e.insert(timestamp)
+		requireEntryInvariants(t, e)
 
-		if !slices.IsSorted(e.timestamps) {
-			t.Fatalf("arrival %d (insert %d): timestamps = %v, want sorted", i, timestamp, e.timestamps)
-		}
-		if got, want := len(e.timestamps), i+1; got != want {
-			t.Fatalf("after inserting %d (arrival %d): len = %d, want %d", timestamp, i, got, want)
+		want := slices.Clone(arrivals[:i+1])
+		slices.Sort(want)
+		if got := e.expanded(); !slices.Equal(got, want) {
+			t.Fatalf("after arrival %d (insert %d): events = %v, want %v", i, timestamp, got, want)
 		}
 	}
 }
 
-func TestEntryInsertDuplicateOfLastAppends(t *testing.T) {
-	e := &entry{timestamps: make([]int64, 0, 16)} // pre-grown so append cannot reallocate.
+// TestEntryRecordInOrderIncrementsNewestBucket pins the property the run-length
+// encoding exists for: repeats of the newest bucket cost an increment, leaving
+// the slice untouched, so a hot key's memory tracks elapsed time and not the
+// event rate.
+func TestEntryRecordInOrderIncrementsNewestBucket(t *testing.T) {
+	e := &entry{buckets: make([]bucket, 0, 16)} // pre-grown so append cannot reallocate.
 	for _, timestamp := range []int64{1, 2, 3} {
 		e.insert(timestamp)
 	}
-	backingArray := &e.timestamps[0]
+	backingArray := &e.buckets[0]
 
 	for range 3 {
 		e.insert(3)
 	}
 
-	if want := []int64{1, 2, 3, 3, 3, 3}; !slices.Equal(e.timestamps, want) {
-		t.Fatalf("timestamps = %v, want %v", e.timestamps, want)
+	requireEntryInvariants(t, e)
+	if got, want := len(e.buckets), 3; got != want {
+		t.Fatalf("buckets after repeats = %d, want %d (repeats must not grow the slice)", got, want)
 	}
-	if &e.timestamps[0] != backingArray {
-		t.Fatal("duplicate of the newest timestamp moved earlier elements, want a plain append")
+	if want := []int64{1, 2, 3, 3, 3, 3}; !slices.Equal(e.expanded(), want) {
+		t.Fatalf("events = %v, want %v", e.expanded(), want)
 	}
+	if &e.buckets[0] != backingArray {
+		t.Fatal("repeat of the newest bucket moved earlier buckets, want an in-place increment")
+	}
+
+	e.insert(4)
+
+	requireEntryInvariants(t, e)
+	if got, want := len(e.buckets), 4; got != want {
+		t.Fatalf("buckets after a new timestamp = %d, want %d", got, want)
+	}
+	if got, want := e.total, 7; got != want {
+		t.Fatalf("total = %d, want %d", got, want)
+	}
+}
+
+// TestEntryRecordOutOfOrderIncrementsExistingBucket pins that a late arrival
+// only shifts buckets when it opens a new one: a repeat of an older bucket is an
+// increment, so jittered timestamps on a hot key cannot degrade into a memmove
+// per event.
+func TestEntryRecordOutOfOrderIncrementsExistingBucket(t *testing.T) {
+	e := &entry{}
+	for _, timestamp := range []int64{10, 20, 30} {
+		e.insert(timestamp)
+	}
+
+	e.insert(20)
+
+	requireEntryInvariants(t, e)
+	if got, want := len(e.buckets), 3; got != want {
+		t.Fatalf("buckets after repeating an older one = %d, want %d", got, want)
+	}
+	if got, want := e.buckets[1].count, 2; got != want {
+		t.Fatalf("count of the repeated bucket = %d, want %d", got, want)
+	}
+
+	e.insert(15)
+
+	requireEntryInvariants(t, e)
+	if want := []int64{10, 15, 20, 20, 30}; !slices.Equal(e.expanded(), want) {
+		t.Fatalf("events = %v, want %v", e.expanded(), want)
+	}
+}
+
+// TestEntryPruneBranches covers every way prune can dispose of the expired
+// prefix. Which branch runs is a memory decision, not a semantic one, so each
+// case also asserts the resulting total.
+func TestEntryPruneBranches(t *testing.T) {
+	t.Run("nothing expired is a no-op", func(t *testing.T) {
+		e := entryWithBuckets(4, 10, 20, 30)
+		backingArray, capBefore := &e.buckets[0], cap(e.buckets)
+
+		e.prune(5)
+
+		requireEntryInvariants(t, e)
+		if got, want := e.expanded(), []int64{10, 20, 30}; !slices.Equal(got, want) {
+			t.Fatalf("events = %v, want %v", got, want)
+		}
+		if &e.buckets[0] != backingArray || cap(e.buckets) != capBefore {
+			t.Fatal("prune touched the backing array although nothing had expired")
+		}
+	})
+
+	t.Run("fully expired small entry keeps its array", func(t *testing.T) {
+		e := entryWithBuckets(4, 10, 20, 30)
+		backingArray, capBefore := &e.buckets[0], cap(e.buckets)
+
+		e.prune(30)
+
+		requireEntryInvariants(t, e)
+		if len(e.buckets) != 0 {
+			t.Fatalf("buckets = %v, want empty", e.buckets)
+		}
+		if cap(e.buckets) != capBefore {
+			t.Fatalf("cap = %d, want the array kept at %d for the imminent refill", cap(e.buckets), capBefore)
+		}
+		if &e.buckets[:1][0] != backingArray {
+			t.Fatal("prune reallocated a small fully expired entry")
+		}
+	})
+
+	t.Run("fully expired large entry releases its array", func(t *testing.T) {
+		e := entryWithBuckets(entryReallocMinCap*2, 10, 20, 30)
+
+		e.prune(30)
+
+		requireEntryInvariants(t, e)
+		if e.buckets != nil {
+			t.Fatalf("buckets = %v, want nil so the large array is collected", e.buckets)
+		}
+	})
+
+	// Both survivor-run cases give the entry a capacity of exactly twice its
+	// survivors, which is the largest capacity that does not trip right-sizing,
+	// so the branch under test is the one prune selects.
+	t.Run("short survivor run is copied to the front", func(t *testing.T) {
+		const survivors, expired = pruneCopyMaxLen, 8 // at the copy threshold.
+		e := entryWithBuckets(2*survivors, sequence(0, expired+survivors)...)
+		backingArray, capBefore := &e.buckets[0], cap(e.buckets)
+
+		e.prune(expired - 1)
+
+		requireEntryInvariants(t, e)
+		if got, want := e.expanded(), sequence(expired, survivors); !slices.Equal(got, want) {
+			t.Fatalf("events = %v, want %v", got, want)
+		}
+		if &e.buckets[0] != backingArray {
+			t.Fatal("short survivor run was not copied to the front of the array")
+		}
+		if cap(e.buckets) != capBefore {
+			t.Fatalf("cap = %d, want the full %d kept for later appends", cap(e.buckets), capBefore)
+		}
+	})
+
+	t.Run("long survivor run is re-sliced forward", func(t *testing.T) {
+		const survivors, expired = pruneCopyMaxLen + 1, 8 // just past the threshold.
+		e := entryWithBuckets(2*survivors, sequence(0, expired+survivors)...)
+		capBefore := cap(e.buckets)
+		firstSurvivor := &e.buckets[expired]
+
+		e.prune(expired - 1)
+
+		requireEntryInvariants(t, e)
+		if got, want := e.expanded(), sequence(expired, survivors); !slices.Equal(got, want) {
+			t.Fatalf("events = %v, want %v", got, want)
+		}
+		if &e.buckets[0] != firstSurvivor {
+			t.Fatal("long survivor run was copied, want a free forward re-slice")
+		}
+		if got, want := cap(e.buckets), capBefore-expired; got != want {
+			t.Fatalf("cap = %d, want %d (the dropped prefix is given up)", got, want)
+		}
+	})
+
+	t.Run("survivors much smaller than the array are right-sized", func(t *testing.T) {
+		e := &entry{}
+		for i := range int64(200) {
+			e.insert(i)
+		}
+		capBefore := cap(e.buckets)
+
+		e.prune(196)
+
+		requireEntryInvariants(t, e)
+		if got, want := e.expanded(), []int64{197, 198, 199}; !slices.Equal(got, want) {
+			t.Fatalf("events = %v, want %v", got, want)
+		}
+		if cap(e.buckets) >= capBefore {
+			t.Fatalf("cap after prune = %d, want smaller than %d", cap(e.buckets), capBefore)
+		}
+	})
+}
+
+// TestGetOnFullyExpiredEntryWithoutStore exercises liveCount's worst case: a key
+// whose buckets have all expired and that no Store or sweep has touched since.
+// Get must sum the expired prefix away without mutating the entry.
+func TestGetOnFullyExpiredEntryWithoutStore(t *testing.T) {
+	const (
+		nanosPerSecond  = int64(time.Second)
+		baseEpoch       = 1_700_000_000 * nanosPerSecond
+		buckets         = 5
+		eventsPerBucket = 3
+	)
+	c := newTestCache(t, Config{Precision: time.Second, WindowSize: 300 * time.Second, EpochUnit: EpochInNanos})
+
+	for b := range int64(buckets) {
+		for range eventsPerBucket {
+			c.Store(baseEpoch+b*nanosPerSecond, "quiet")
+		}
+	}
+
+	// Another key drags the high-water mark past the window, expiring every
+	// bucket of "quiet" without touching its entry.
+	liveEpoch := baseEpoch + 400*nanosPerSecond
+	c.Store(liveEpoch, "loud")
+
+	if got := c.Get(liveEpoch, "quiet"); got != 0 {
+		t.Fatalf("Get on a fully expired entry = %d, want 0", got)
+	}
+	if got, want := c.retainedEvents("quiet"), buckets*eventsPerBucket; got != want {
+		t.Fatalf("retained events after Get = %d, want %d (Get must not mutate)", got, want)
+	}
+	if got, want := c.bucketBreadth("quiet"), buckets; got != want {
+		t.Fatalf("retained buckets after Get = %d, want %d (Get must not mutate)", got, want)
+	}
+
+	if got := c.Store(liveEpoch, "quiet"); got != 1 {
+		t.Fatalf("Store after full expiry = %d, want 1", got)
+	}
+	if got := c.bucketBreadth("quiet"); got != 1 {
+		t.Fatalf("retained buckets after the Store = %d, want 1 (expired prefix not pruned)", got)
+	}
+}
+
+// TestStoreSameBucketBoundedMemory pins the memory bound the run-length encoding
+// buys: a single key receiving hundreds of events per second for longer than the
+// window never holds more buckets than the window spans, while every event is
+// still counted.
+func TestStoreSameBucketBoundedMemory(t *testing.T) {
+	const (
+		nanosPerSecond  = int64(time.Second)
+		baseEpoch       = 1_700_000_000 * nanosPerSecond
+		eventsPerSecond = 500
+		nanosPerEvent   = nanosPerSecond / eventsPerSecond
+		windowSeconds   = 300
+		events          = 200_000 // 400 seconds, comfortably past the window.
+		inspectEvery    = 1_000
+	)
+	c := newTestCache(t, Config{
+		Precision:  time.Second,
+		WindowSize: windowSeconds * time.Second,
+		EpochUnit:  EpochInNanos,
+	})
+
+	epochOf := func(i int) int64 { return baseEpoch + int64(i)*nanosPerEvent }
+	secondOf := func(i int) int { return i / eventsPerSecond }
+	// The generator emits eventsPerSecond events per bucket in order, so the
+	// live count after event i is everything stored since the oldest bucket that
+	// the cutoff at secondOf(i) still admits.
+	liveAfter := func(i int) int {
+		oldestAliveSecond := secondOf(i) - windowSeconds + 1
+		if oldestAliveSecond <= 0 {
+			return i + 1
+		}
+		return i + 1 - oldestAliveSecond*eventsPerSecond
+	}
+
+	for i := range events {
+		if got, want := c.Store(epochOf(i), "hot"), liveAfter(i); got != want {
+			t.Fatalf("Store #%d = %d, want %d", i+1, got, want)
+		}
+		if i%inspectEvery != 0 {
+			continue
+		}
+		if got := c.bucketBreadth("hot"); got > windowSeconds {
+			t.Fatalf("after %d events the key holds %d buckets, want at most %d", i+1, got, windowSeconds)
+		}
+	}
+
+	if got, want := c.Get(epochOf(events-1), "hot"), liveAfter(events-1); got != want {
+		t.Fatalf("Get = %d, want %d live events", got, want)
+	}
+	if got := c.bucketBreadth("hot"); got > windowSeconds {
+		t.Fatalf("final bucket count = %d, want at most %d", got, windowSeconds)
+	}
+}
+
+// requireEntryInvariants asserts the invariants documented on entry: buckets
+// sorted strictly ascending, every count positive, and total equal to their sum.
+func requireEntryInvariants(t *testing.T, e *entry) {
+	t.Helper()
+
+	sum := 0
+	for i, b := range e.buckets {
+		if i > 0 && b.timestamp <= e.buckets[i-1].timestamp {
+			t.Fatalf(
+				"bucket %d has timestamp %d, want strictly greater than %d",
+				i, b.timestamp, e.buckets[i-1].timestamp,
+			)
+		}
+		if b.count < 1 {
+			t.Fatalf("bucket %d (timestamp %d) has count %d, want >= 1", i, b.timestamp, b.count)
+		}
+		sum += b.count
+	}
+	if e.total != sum {
+		t.Fatalf("total = %d, want %d (the sum of the bucket counts)", e.total, sum)
+	}
+}
+
+// expanded returns the entry's events as one timestamp per event, which is the
+// representation the window semantics are defined in.
+func (e *entry) expanded() []int64 {
+	var out []int64
+	for _, b := range e.buckets {
+		for range b.count {
+			out = append(out, b.timestamp)
+		}
+	}
+	return out
+}
+
+// entryWithBuckets builds an entry whose backing array has the given capacity
+// and holds one event in each of the given timestamps, so a test can pick the
+// prune branch it wants to exercise.
+func entryWithBuckets(capacity int, timestamps ...int64) *entry {
+	e := &entry{buckets: make([]bucket, 0, capacity)}
+	for _, timestamp := range timestamps {
+		e.insert(timestamp)
+	}
+	return e
+}
+
+func sequence(start, length int) []int64 {
+	out := make([]int64, length)
+	for i := range out {
+		out[i] = int64(start + i)
+	}
+	return out
 }
 
 func TestStoreSameBucketCountsEveryEvent(t *testing.T) {
