@@ -10,6 +10,11 @@ import (
 	"time"
 )
 
+// testLayout is the bucket layout of a Config that leaves CountBits zero, which
+// is what every test builds unless it states otherwise. The white-box tests
+// unpack buckets through it.
+var testLayout = newBucketLayout(defaultCountBits)
+
 // newTestCache builds a Cache with a long sweep interval so the background
 // janitor never interferes with deterministic assertions. Tests that need
 // sweeping call c.sweep() directly.
@@ -828,7 +833,7 @@ func TestFirstStoreOnFreshCacheAcceptsNegativeEpoch(t *testing.T) {
 // high-water mark against its "never stored" value, where a plain
 // HW - WindowSize subtraction would wrap around, and pins where the usable
 // epoch range now begins: math.MinInt64+1 has no representable bucket and is
-// rejected, minBucketTimestamp is the oldest epoch a cache accepts.
+// rejected, testLayout.minTimestamp is the oldest epoch a cache accepts.
 func TestUnobservedHighWaterDoesNotUnderflow(t *testing.T) {
 	c := newTestCache(t, Config{Precision: time.Second, WindowSize: 60 * time.Second, EpochUnit: EpochInSeconds})
 
@@ -843,10 +848,10 @@ func TestUnobservedHighWaterDoesNotUnderflow(t *testing.T) {
 		t.Fatalf("totalKeys after sweeping a fresh cache = %d, want 0", got)
 	}
 
-	if got := c.Store(minBucketTimestamp, "k"); got != 1 {
+	if got := c.Store(testLayout.minTimestamp, "k"); got != 1 {
 		t.Fatalf("Store at the oldest representable epoch = %d, want 1", got)
 	}
-	if got := c.Get(minBucketTimestamp, "k"); got != 1 {
+	if got := c.Get(testLayout.minTimestamp, "k"); got != 1 {
 		t.Fatalf("Get at the oldest representable epoch = %d, want 1", got)
 	}
 	c.sweep()
@@ -907,13 +912,21 @@ func TestStorePrunesExpiredPrefixOfTouchedKey(t *testing.T) {
 type windowModel struct {
 	precision  int64
 	windowSize int64
-	highWater  int64
-	observed   bool
-	events     map[string][]int64
+	// layout mirrors the cache's bucket layout, which decides the epochs both
+	// implementations must reject.
+	layout    bucketLayout
+	highWater int64
+	observed  bool
+	events    map[string][]int64
 }
 
-func newWindowModel(precision, windowSize int64) *windowModel {
-	return &windowModel{precision: precision, windowSize: windowSize, events: make(map[string][]int64)}
+func newWindowModel(precision, windowSize int64, layout bucketLayout) *windowModel {
+	return &windowModel{
+		precision:  precision,
+		windowSize: windowSize,
+		layout:     layout,
+		events:     make(map[string][]int64),
+	}
 }
 
 func (m *windowModel) bucket(epoch int64) int64 {
@@ -928,16 +941,16 @@ func (m *windowModel) alive(timestamp int64) bool {
 	return !m.observed || timestamp > m.highWater-m.windowSize
 }
 
-// representableTimestamp mirrors the cache's rejection of epochs whose bucket
-// timestamp does not fit a bucket word. It is part of the public contract, so
-// the model has to reproduce it to stay comparable.
-func representableTimestamp(timestamp int64) bool {
-	return timestamp >= minBucketTimestamp && timestamp <= maxBucketTimestamp
+// representable mirrors the cache's rejection of epochs whose bucket timestamp
+// does not fit a bucket word. It is part of the public contract, so the model
+// has to reproduce it, against the same layout, to stay comparable.
+func (m *windowModel) representable(timestamp int64) bool {
+	return timestamp >= m.layout.minTimestamp && timestamp <= m.layout.maxTimestamp
 }
 
 func (m *windowModel) store(epoch int64, key string) int {
 	timestamp := m.bucket(epoch)
-	if !representableTimestamp(timestamp) {
+	if !m.representable(timestamp) {
 		return lateEvent
 	}
 	if !m.observed || timestamp > m.highWater {
@@ -953,7 +966,7 @@ func (m *windowModel) store(epoch int64, key string) int {
 
 func (m *windowModel) get(epoch int64, key string) int {
 	timestamp := m.bucket(epoch)
-	if !representableTimestamp(timestamp) || !m.alive(timestamp) {
+	if !m.representable(timestamp) || !m.alive(timestamp) {
 		return lateEvent
 	}
 	return m.count(key)
@@ -971,84 +984,112 @@ func (m *windowModel) count(key string) int {
 
 // FuzzStoreGetInvariants drives arbitrary Store/Get sequences over a handful of
 // keys and asserts every return value against the reference model, including the
-// live counts left behind at the end.
+// live counts left behind at the end. The bucket layout is fuzzed too, so the
+// rejection of unrepresentable epochs is exercised at every width.
 func FuzzStoreGetInvariants(f *testing.F) {
 	seeds := []struct {
-		base int64
-		ops  []byte
+		base      int64
+		countBits int
+		ops       []byte
 	}{
-		{1_700_000_000, []byte{0, 1, 2, 200, 3}},
-		{0, []byte{250, 251, 0, 5, 7}},
-		{-1_000, []byte{0, 60, 120, 1, 255}},
+		{1_700_000_000, defaultCountBits, []byte{0, 1, 2, 200, 3}},
+		{0, defaultCountBits, []byte{250, 251, 0, 5, 7}},
+		{-1_000, defaultCountBits, []byte{0, 60, 120, 1, 255}},
 		// Many duplicates of one bucket for one key, then an out-of-order
 		// duplicate of an earlier bucket, which exercises ordered insertion into
 		// an existing run of equal timestamps.
-		{1_700_000_000, []byte{128, 128, 128, 128, 128, 120, 120, 128, 132}},
+		{1_700_000_000, defaultCountBits, []byte{128, 128, 128, 128, 128, 120, 120, 128, 132}},
 		// Repeats of an older bucket interleaved with newer ones, so an
 		// out-of-order arrival lands on a bucket that earlier prunes may already
 		// have dropped.
-		{1_700_000_000, []byte{128, 128, 136, 136, 144, 128, 120, 128}},
+		{1_700_000_000, defaultCountBits, []byte{128, 128, 136, 136, 144, 128, 120, 128}},
 		// Bases at both ends of the representable bucket range, where the offsets
 		// fuzzOperand adds push some epochs past the boundary and both the cache
 		// and the model must reject them.
-		{maxBucketTimestamp, []byte{248, 128, 0, 252, 8, 244}},
-		{minBucketTimestamp + 1, []byte{0, 8, 128, 248, 4, 252}},
+		{testLayout.maxTimestamp, defaultCountBits, []byte{248, 128, 0, 252, 8, 244}},
+		{testLayout.minTimestamp + 1, defaultCountBits, []byte{0, 8, 128, 248, 4, 252}},
+		// The narrowest and the widest layouts, where a bucket spills after a few
+		// hundred events and where the representable range is at its smallest.
+		{1_700_000_000, minCountBits, []byte{128, 128, 128, 120, 128, 136, 128}},
+		{newBucketLayout(minCountBits).maxTimestamp, minCountBits, []byte{248, 128, 0, 252, 8, 244}},
+		{1_700_000_000, maxCountBits, []byte{128, 128, 120, 136, 128, 144, 128}},
+		{newBucketLayout(maxCountBits).maxTimestamp, maxCountBits, []byte{248, 128, 0, 252, 8, 244}},
 	}
 	for _, seed := range seeds {
-		f.Add(seed.base, seed.ops)
+		f.Add(seed.base, byte(seed.countBits-minCountBits), seed.ops)
 	}
 
-	f.Fuzz(func(t *testing.T, base int64, ops []byte) {
-		const (
-			precision  = 10
-			windowSize = 60
-			maxFuzzOps = 256
-		)
-
-		// The base is folded into the representable bucket range, so the offsets
-		// fuzzOperand adds stay well inside int64 and cannot overflow the
-		// reference model's arithmetic, while a base at either end still produces
-		// the out-of-range epochs both implementations must reject. A bounded op
-		// count keeps every execution fast, which buys more coverage than
-		// replaying arbitrarily long inputs.
-		base %= maxBucketTimestamp + 1
-		if len(ops) > maxFuzzOps {
-			ops = ops[:maxFuzzOps]
-		}
-
-		c := newTestCache(t, Config{
-			Precision:  precision * time.Second,
-			WindowSize: windowSize * time.Second,
-			EpochUnit:  EpochInSeconds,
-		})
-		model := newWindowModel(precision, windowSize)
-
-		for _, op := range ops {
-			key, epoch := fuzzOperand(base, op, precision)
-			if op&fuzzReadBit == 0 {
-				want := model.store(epoch, key)
-				if got := c.Store(epoch, key); got != want {
-					t.Fatalf("Store(%d, %s) = %d, want %d", epoch, key, got, want)
-				}
-				continue
-			}
-			want := model.get(epoch, key)
-			if got := c.Get(epoch, key); got != want {
-				t.Fatalf("Get(%d, %s) = %d, want %d", epoch, key, got, want)
-			}
-		}
-
-		if !model.observed {
-			return
-		}
-		for k := range fuzzKeys {
-			key := fmt.Sprintf("key-%d", k)
-			want := model.get(model.highWater, key)
-			if got := c.Get(model.highWater, key); got != want {
-				t.Fatalf("final Get(%d, %s) = %d, want %d", model.highWater, key, got, want)
-			}
-		}
+	f.Fuzz(func(t *testing.T, base int64, countBits byte, ops []byte) {
+		requireModelAgreement(t, foldCountBits(countBits), base, ops)
 	})
+}
+
+// foldCountBits maps an arbitrary byte onto an accepted Config.CountBits, so
+// that the fuzzer spends its budget on layouts New builds rather than on
+// rejected configurations.
+func foldCountBits(b byte) int {
+	widths := maxCountBits - minCountBits + 1
+	return minCountBits + int(b)%widths
+}
+
+// requireModelAgreement replays ops against a cache of the given width and the
+// reference model, asserting that every return value agrees and that the live
+// counts left behind at the end do too.
+//
+// The base is folded into the representable bucket range, so the offsets
+// fuzzOperand adds stay well inside int64 and cannot overflow the reference
+// model's arithmetic, while a base at either end still produces the
+// out-of-range epochs both implementations must reject. A bounded op count keeps
+// every execution fast, which buys more coverage than replaying arbitrarily long
+// inputs.
+func requireModelAgreement(t *testing.T, countBits int, base int64, ops []byte) {
+	t.Helper()
+
+	const (
+		precision  = 10
+		windowSize = 60
+		maxFuzzOps = 256
+	)
+
+	layout := newBucketLayout(countBits)
+	base %= layout.maxTimestamp + 1
+	if len(ops) > maxFuzzOps {
+		ops = ops[:maxFuzzOps]
+	}
+
+	c := newTestCache(t, Config{
+		Precision:  precision * time.Second,
+		WindowSize: windowSize * time.Second,
+		EpochUnit:  EpochInSeconds,
+		CountBits:  countBits,
+	})
+	model := newWindowModel(precision, windowSize, layout)
+
+	for _, op := range ops {
+		key, epoch := fuzzOperand(base, op, precision)
+		if op&fuzzReadBit == 0 {
+			want := model.store(epoch, key)
+			if got := c.Store(epoch, key); got != want {
+				t.Fatalf("countBits %d: Store(%d, %s) = %d, want %d", countBits, epoch, key, got, want)
+			}
+			continue
+		}
+		want := model.get(epoch, key)
+		if got := c.Get(epoch, key); got != want {
+			t.Fatalf("countBits %d: Get(%d, %s) = %d, want %d", countBits, epoch, key, got, want)
+		}
+	}
+
+	if !model.observed {
+		return
+	}
+	for k := range fuzzKeys {
+		key := fmt.Sprintf("key-%d", k)
+		want := model.get(model.highWater, key)
+		if got := c.Get(model.highWater, key); got != want {
+			t.Fatalf("countBits %d: final Get(%d, %s) = %d, want %d", countBits, model.highWater, key, got, want)
+		}
+	}
 }
 
 const (
@@ -1077,7 +1118,7 @@ func TestEntryInvariantsHoldForMixedArrivals(t *testing.T) {
 
 	e := &entry{}
 	for i, timestamp := range arrivals {
-		e.insert(timestamp)
+		e.insert(testLayout, timestamp)
 		requireEntryInvariants(t, e)
 
 		want := slices.Clone(arrivals[:i+1])
@@ -1095,12 +1136,12 @@ func TestEntryInvariantsHoldForMixedArrivals(t *testing.T) {
 func TestEntryRecordInOrderIncrementsNewestBucket(t *testing.T) {
 	e := &entry{buckets: make([]bucket, 0, 16)} // pre-grown so append cannot reallocate.
 	for _, timestamp := range []int64{1, 2, 3} {
-		e.insert(timestamp)
+		e.insert(testLayout, timestamp)
 	}
 	backingArray := &e.buckets[0]
 
 	for range 3 {
-		e.insert(3)
+		e.insert(testLayout, 3)
 	}
 
 	requireEntryInvariants(t, e)
@@ -1114,7 +1155,7 @@ func TestEntryRecordInOrderIncrementsNewestBucket(t *testing.T) {
 		t.Fatal("repeat of the newest bucket moved earlier buckets, want an in-place increment")
 	}
 
-	e.insert(4)
+	e.insert(testLayout, 4)
 
 	requireEntryInvariants(t, e)
 	if got, want := len(e.buckets), 4; got != want {
@@ -1132,20 +1173,20 @@ func TestEntryRecordInOrderIncrementsNewestBucket(t *testing.T) {
 func TestEntryRecordOutOfOrderIncrementsExistingBucket(t *testing.T) {
 	e := &entry{}
 	for _, timestamp := range []int64{10, 20, 30} {
-		e.insert(timestamp)
+		e.insert(testLayout, timestamp)
 	}
 
-	e.insert(20)
+	e.insert(testLayout, 20)
 
 	requireEntryInvariants(t, e)
 	if got, want := len(e.buckets), 3; got != want {
 		t.Fatalf("buckets after repeating an older one = %d, want %d", got, want)
 	}
-	if got, want := e.buckets[1].count(), 2; got != want {
+	if got, want := testLayout.count(e.buckets[1]), 2; got != want {
 		t.Fatalf("count of the repeated bucket = %d, want %d", got, want)
 	}
 
-	e.insert(15)
+	e.insert(testLayout, 15)
 
 	requireEntryInvariants(t, e)
 	if want := []int64{10, 15, 20, 20, 30}; !slices.Equal(e.expanded(), want) {
@@ -1161,7 +1202,7 @@ func TestEntryPruneBranches(t *testing.T) {
 		e := entryWithBuckets(4, 10, 20, 30)
 		backingArray, capBefore := &e.buckets[0], cap(e.buckets)
 
-		e.prune(5)
+		e.prune(testLayout, 5)
 
 		requireEntryInvariants(t, e)
 		if got, want := e.expanded(), []int64{10, 20, 30}; !slices.Equal(got, want) {
@@ -1176,7 +1217,7 @@ func TestEntryPruneBranches(t *testing.T) {
 		e := entryWithBuckets(4, 10, 20, 30)
 		backingArray, capBefore := &e.buckets[0], cap(e.buckets)
 
-		e.prune(30)
+		e.prune(testLayout, 30)
 
 		requireEntryInvariants(t, e)
 		if len(e.buckets) != 0 {
@@ -1193,7 +1234,7 @@ func TestEntryPruneBranches(t *testing.T) {
 	t.Run("fully expired large entry releases its array", func(t *testing.T) {
 		e := entryWithBuckets(entryReallocMinCap*2, 10, 20, 30)
 
-		e.prune(30)
+		e.prune(testLayout, 30)
 
 		requireEntryInvariants(t, e)
 		if e.buckets != nil {
@@ -1209,7 +1250,7 @@ func TestEntryPruneBranches(t *testing.T) {
 		e := entryWithBuckets(2*survivors, sequence(0, expired+survivors)...)
 		backingArray, capBefore := &e.buckets[0], cap(e.buckets)
 
-		e.prune(expired - 1)
+		e.prune(testLayout, expired-1)
 
 		requireEntryInvariants(t, e)
 		if got, want := e.expanded(), sequence(expired, survivors); !slices.Equal(got, want) {
@@ -1229,7 +1270,7 @@ func TestEntryPruneBranches(t *testing.T) {
 		capBefore := cap(e.buckets)
 		firstSurvivor := &e.buckets[expired]
 
-		e.prune(expired - 1)
+		e.prune(testLayout, expired-1)
 
 		requireEntryInvariants(t, e)
 		if got, want := e.expanded(), sequence(expired, survivors); !slices.Equal(got, want) {
@@ -1246,11 +1287,11 @@ func TestEntryPruneBranches(t *testing.T) {
 	t.Run("survivors much smaller than the array are right-sized", func(t *testing.T) {
 		e := &entry{}
 		for i := range int64(200) {
-			e.insert(i)
+			e.insert(testLayout, i)
 		}
 		capBefore := cap(e.buckets)
 
-		e.prune(196)
+		e.prune(testLayout, 196)
 
 		requireEntryInvariants(t, e)
 		if got, want := e.expanded(), []int64{197, 198, 199}; !slices.Equal(got, want) {
@@ -1367,10 +1408,13 @@ func requireEntryInvariants(t *testing.T, e *entry) {
 		if i > 0 {
 			requireOrderedAfterPrevious(t, e, i)
 		}
-		if b.count() < 1 {
-			t.Fatalf("bucket %d (timestamp %d) has count %d, want >= 1", i, b.timestamp(), b.count())
+		if testLayout.count(b) < 1 {
+			t.Fatalf(
+				"bucket %d (timestamp %d) has count %d, want >= 1",
+				i, testLayout.timestamp(b), testLayout.count(b),
+			)
 		}
-		sum += b.count()
+		sum += testLayout.count(b)
 	}
 	if e.total != sum {
 		t.Fatalf("total = %d, want %d (the sum of the bucket counts)", e.total, sum)
@@ -1384,16 +1428,16 @@ func requireOrderedAfterPrevious(t *testing.T, e *entry, index int) {
 	t.Helper()
 
 	current, previous := e.buckets[index], e.buckets[index-1]
-	if current.timestamp() < previous.timestamp() {
+	if testLayout.timestamp(current) < testLayout.timestamp(previous) {
 		t.Fatalf(
 			"bucket %d has timestamp %d, want >= %d",
-			index, current.timestamp(), previous.timestamp(),
+			index, testLayout.timestamp(current), testLayout.timestamp(previous),
 		)
 	}
-	if current.timestamp() == previous.timestamp() && !previous.full() {
+	if testLayout.timestamp(current) == testLayout.timestamp(previous) && !testLayout.full(previous) {
 		t.Fatalf(
 			"bucket %d repeats timestamp %d after a bucket holding %d events, want a repeat only after a full one",
-			index, current.timestamp(), previous.count(),
+			index, testLayout.timestamp(current), testLayout.count(previous),
 		)
 	}
 }
@@ -1403,8 +1447,8 @@ func requireOrderedAfterPrevious(t *testing.T, e *entry, index int) {
 func (e *entry) expanded() []int64 {
 	var out []int64
 	for _, b := range e.buckets {
-		for range b.count() {
-			out = append(out, b.timestamp())
+		for range testLayout.count(b) {
+			out = append(out, testLayout.timestamp(b))
 		}
 	}
 	return out
@@ -1416,7 +1460,7 @@ func (e *entry) expanded() []int64 {
 func entryWithBuckets(capacity int, timestamps ...int64) *entry {
 	e := &entry{buckets: make([]bucket, 0, capacity)}
 	for _, timestamp := range timestamps {
-		e.insert(timestamp)
+		e.insert(testLayout, timestamp)
 	}
 	return e
 }
@@ -1473,71 +1517,26 @@ func TestStoreSameBucketCountsEveryEvent(t *testing.T) {
 	}
 }
 
-// TestBucketPackRoundTrip pins the packing contract a bucket word rests on: a
-// timestamp and a count go in and come back out unchanged across the whole
-// representable range, and the packed words order by timestamp alone, which is
-// what lets lowerBound compare them without unpacking.
-func TestBucketPackRoundTrip(t *testing.T) {
-	timestamps := []int64{minBucketTimestamp, -1, 0, 1, 1_700_000_000, maxBucketTimestamp}
-	counts := []int{1, 2, maxBucketCount}
-
-	for _, timestamp := range timestamps {
-		for _, count := range counts {
-			b := newBucket(timestamp, count)
-			if got := b.timestamp(); got != timestamp {
-				t.Fatalf("newBucket(%d, %d).timestamp() = %d, want %d", timestamp, count, got, timestamp)
-			}
-			if got := b.count(); got != count {
-				t.Fatalf("newBucket(%d, %d).count() = %d, want %d", timestamp, count, got, count)
-			}
-			if got, want := b.full(), count == maxBucketCount; got != want {
-				t.Fatalf("newBucket(%d, %d).full() = %t, want %t", timestamp, count, got, want)
-			}
-		}
-	}
-
-	for i := 1; i < len(timestamps); i++ {
-		older, newer := newBucket(timestamps[i-1], maxBucketCount), newBucket(timestamps[i], 1)
-		if older >= newer {
-			t.Fatalf(
-				"newBucket(%d, %d) is not below newBucket(%d, 1): a full count must not outrank a later timestamp",
-				timestamps[i-1], maxBucketCount, timestamps[i],
-			)
-		}
-	}
-
-	// Counting one more event is an increment of the whole word, which the
-	// record methods rely on; it must move the count and leave the timestamp.
-	counted := newBucket(1_700_000_000, 1)
-	counted++
-	if got, want := counted.timestamp(), int64(1_700_000_000); got != want {
-		t.Fatalf("timestamp after incrementing the word = %d, want %d", got, want)
-	}
-	if got, want := counted.count(), 2; got != want {
-		t.Fatalf("count after incrementing the word = %d, want %d", got, want)
-	}
-}
-
 // TestEntrySpillsWhenBucketIsFull covers the only case in which two buckets may
 // share a timestamp: a bucket whose count fills its word spills into a further
 // word, in order, so that no event is lost and expiry still drops the whole
 // timestamp at once.
 func TestEntrySpillsWhenBucketIsFull(t *testing.T) {
 	t.Run("in order", func(t *testing.T) {
-		e := &entry{buckets: []bucket{newBucket(10, maxBucketCount)}, total: maxBucketCount}
+		e := &entry{buckets: []bucket{testLayout.newBucket(10, testLayout.maxCount)}, total: testLayout.maxCount}
 
-		e.insert(10)
+		e.insert(testLayout, 10)
 
 		if got, want := len(e.buckets), 2; got != want {
 			t.Fatalf("buckets after filling one = %d, want %d", got, want)
 		}
-		if got, want := e.buckets[1].timestamp(), int64(10); got != want {
+		if got, want := testLayout.timestamp(e.buckets[1]), int64(10); got != want {
 			t.Fatalf("timestamp of the spill bucket = %d, want %d", got, want)
 		}
-		if got, want := e.buckets[1].count(), 1; got != want {
+		if got, want := testLayout.count(e.buckets[1]), 1; got != want {
 			t.Fatalf("count of the spill bucket = %d, want %d", got, want)
 		}
-		if got, want := e.total, maxBucketCount+1; got != want {
+		if got, want := e.total, testLayout.maxCount+1; got != want {
 			t.Fatalf("total = %d, want %d", got, want)
 		}
 		requireEntryInvariants(t, e)
@@ -1545,31 +1544,31 @@ func TestEntrySpillsWhenBucketIsFull(t *testing.T) {
 
 	t.Run("out of order", func(t *testing.T) {
 		e := &entry{
-			buckets: []bucket{newBucket(10, maxBucketCount), newBucket(20, 1)},
-			total:   maxBucketCount + 1,
+			buckets: []bucket{testLayout.newBucket(10, testLayout.maxCount), testLayout.newBucket(20, 1)},
+			total:   testLayout.maxCount + 1,
 		}
 
-		e.insert(10)
+		e.insert(testLayout, 10)
 
 		if got, want := len(e.buckets), 3; got != want {
 			t.Fatalf("buckets after spilling an older one = %d, want %d", got, want)
 		}
-		if got, want := e.buckets[1].timestamp(), int64(10); got != want {
+		if got, want := testLayout.timestamp(e.buckets[1]), int64(10); got != want {
 			t.Fatalf("timestamp at index 1 = %d, want %d (the spill belongs beside its bucket)", got, want)
 		}
-		if got, want := e.buckets[2].timestamp(), int64(20); got != want {
+		if got, want := testLayout.timestamp(e.buckets[2]), int64(20); got != want {
 			t.Fatalf("timestamp at index 2 = %d, want %d", got, want)
 		}
 		requireEntryInvariants(t, e)
 
-		if got, want := e.liveCount(9), maxBucketCount+2; got != want {
+		if got, want := e.liveCount(testLayout, 9), testLayout.maxCount+2; got != want {
 			t.Fatalf("liveCount(9) = %d, want %d", got, want)
 		}
-		if got, want := e.liveCount(10), 1; got != want {
+		if got, want := e.liveCount(testLayout, 10), 1; got != want {
 			t.Fatalf("liveCount(10) = %d, want %d (both words of bucket 10 expire together)", got, want)
 		}
 
-		e.prune(10)
+		e.prune(testLayout, 10)
 
 		if got, want := len(e.buckets), 1; got != want {
 			t.Fatalf("buckets after pruning at 10 = %d, want %d", got, want)
@@ -1594,24 +1593,24 @@ func TestLowerBoundSaturatesOutsideRange(t *testing.T) {
 		want   int
 	}{
 		{"far below the range", math.MinInt64, 0},
-		{"oldest representable", minBucketTimestamp, 0},
+		{"oldest representable", testLayout.minTimestamp, 0},
 		{"inside", 25, 2},
-		{"newest representable", maxBucketTimestamp, len(e.buckets)},
-		{"just above the range", maxBucketTimestamp + 1, len(e.buckets)},
+		{"newest representable", testLayout.maxTimestamp, len(e.buckets)},
+		{"just above the range", testLayout.maxTimestamp + 1, len(e.buckets)},
 		{"far above the range", math.MaxInt64, len(e.buckets)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := e.lowerBound(tc.target); got != tc.want {
+			if got := e.lowerBound(testLayout, tc.target); got != tc.want {
 				t.Fatalf("lowerBound(%d) = %d, want %d", tc.target, got, tc.want)
 			}
 		})
 	}
 
-	if got := e.firstAlive(math.MinInt64); got != 0 {
+	if got := e.firstAlive(testLayout, math.MinInt64); got != 0 {
 		t.Fatalf("firstAlive at the cutoff of a fresh cache = %d, want 0", got)
 	}
-	if got, want := e.liveCount(math.MinInt64), 3; got != want {
+	if got, want := e.liveCount(testLayout, math.MinInt64), 3; got != want {
 		t.Fatalf("liveCount at the cutoff of a fresh cache = %d, want %d", got, want)
 	}
 }
@@ -1632,9 +1631,9 @@ func TestOutOfRangeEpochIsRejectedWithoutAdvancingHighWater(t *testing.T) {
 		epoch int64
 	}{
 		{"nanoseconds fed to a seconds cache", 1_700_000_000 * int64(time.Second)},
-		{"just above the range", maxBucketTimestamp + 1},
+		{"just above the range", testLayout.maxTimestamp + 1},
 		{"the largest epoch", math.MaxInt64},
-		{"just below the range", minBucketTimestamp - 1},
+		{"just below the range", testLayout.minTimestamp - 1},
 		{"the smallest epoch", math.MinInt64},
 	}
 	for _, tc := range rejected {
@@ -1649,7 +1648,7 @@ func TestOutOfRangeEpochIsRejectedWithoutAdvancingHighWater(t *testing.T) {
 	if got := c.Get(1_700_000_001, "k"); got != 2 {
 		t.Fatalf("Get at a real epoch = %d, want 2", got)
 	}
-	if got := c.Get(maxBucketTimestamp+1, "k"); got != lateEvent {
+	if got := c.Get(testLayout.maxTimestamp+1, "k"); got != lateEvent {
 		t.Fatalf("Get above the range = %d, want %d", got, lateEvent)
 	}
 }
@@ -1664,7 +1663,7 @@ func TestOutOfRangeEpochIsCheckedAfterUnitConversion(t *testing.T) {
 	if got := c.Store(1_700_000_000*millisPerSecond, "k"); got != 1 {
 		t.Fatalf("Store at a real epoch = %d, want 1", got)
 	}
-	if got := c.Store((maxBucketTimestamp+1)*millisPerSecond, "k"); got != lateEvent {
+	if got := c.Store((testLayout.maxTimestamp+1)*millisPerSecond, "k"); got != lateEvent {
 		t.Fatalf("Store at a millisecond epoch beyond the range = %d, want %d", got, lateEvent)
 	}
 	if got := c.Store(1_700_000_001*millisPerSecond, "k"); got != 2 {
