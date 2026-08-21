@@ -43,18 +43,24 @@ func (s *shard) store(key string, timestamp int64, highWater *atomic.Int64, wind
 
 	e, ok := s.keys[key]
 	if !ok {
-		s.keys[key] = &entry{timestamps: []int64{timestamp}}
+		s.keys[key] = newEntry(timestamp)
 		s.trackPeak()
 		return 1
 	}
 
 	e.prune(cutoff)
-	e.insert(timestamp)
-	return len(e.timestamps)
+	// Spelled out instead of e.insert so that the in-order path inlines here;
+	// see entry.insert for why the combined function does not.
+	if e.inOrder(timestamp) {
+		e.recordInOrder(timestamp)
+	} else {
+		e.recordOutOfOrder(timestamp)
+	}
+	return e.total
 }
 
 // count returns the key's live count without mutating the shard. Cleanup of
-// expired timestamps and empty keys happens on the next Store to the key and in
+// expired buckets and empty keys happens on the next Store to the key and in
 // the janitor sweep. It returns 0 for an absent key.
 func (s *shard) count(key string, cutoff int64) int {
 	s.mu.Lock()
@@ -67,15 +73,16 @@ func (s *shard) count(key string, cutoff int64) int {
 	return e.liveCount(cutoff)
 }
 
-// sweep prunes every key in the shard and compacts the backing map when it has
-// shrunk substantially since its peak.
+// sweep prunes every key in the shard, deletes the keys left without a single
+// retained event, and compacts the backing map when it has shrunk substantially
+// since its peak.
 func (s *shard) sweep(cutoff int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for key, e := range s.keys {
 		e.prune(cutoff)
-		if len(e.timestamps) == 0 {
+		if e.total == 0 {
 			delete(s.keys, key)
 		}
 	}

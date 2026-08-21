@@ -18,8 +18,12 @@
 // Because HW is always greater than or equal to the epoch E of any individual
 // call (Store advances HW to at least E before evaluating liveness), this rule
 // is at least as inclusive as the intuitive "t >= E - WindowSize" window
-// anchored at the call itself. The count for a key is the number of its live
-// timestamps.
+// anchored at the call itself. The count for a key is the number of its events
+// with a live timestamp.
+//
+// Events that share a truncated timestamp are counted individually but stored
+// once, as a bucket holding their number, so a key's memory is bounded by
+// WindowSize/Precision buckets regardless of its event rate.
 //
 // # Out-of-order and late events
 //

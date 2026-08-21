@@ -100,7 +100,10 @@ least the epoch `E` of the call before evaluating liveness, this rule is always
 at least as inclusive as the intuitive window `t >= E - WindowSize` anchored at
 the call itself.
 
-The live count for a key is the number of its alive timestamps.
+The live count for a key is the number of its events with an alive timestamp.
+Events that share a truncated timestamp are counted individually but stored
+once, as a bucket with a count, so a key's memory depends on the window length
+and not on its event rate.
 
 `HW` only ever moves **forward**, and it is never clamped. A single `Store` with
 an epoch in the wrong unit — nanoseconds passed to a cache configured for
@@ -118,9 +121,9 @@ negative infinity, so buckets have a uniform width on both sides of zero.
 
 ### Out-of-order tolerance
 
-Events may arrive in any order. A timestamp is inserted into the key's sorted
-list via binary search, so an older-but-still-live event stored after a newer
-one is counted normally.
+Events may arrive in any order. An event is counted into the bucket of its
+truncated timestamp, located by binary search in the key's sorted bucket list,
+so an older-but-still-live event stored after a newer one is counted normally.
 
 ### Late events and the `-1` sentinel
 
@@ -211,23 +214,31 @@ return an error. Omitting the option keeps the default FNV-1a.
 
 Go maps and slices never shrink their backing storage on their own, so a naive
 counter accumulates memory under churn. `slidingcache` keeps its footprint
-bounded through three mechanisms:
+bounded through four mechanisms:
 
-1. **Lazy pruning.** Every accepted `Store` prunes the touched key's expired
-   prefix before inserting, so a hot key never accumulates dead timestamps.
-   Pruning never removes the key itself: an entry emptied by pruning is
-   immediately refilled by the incoming event, and keys that stop receiving
-   events are deleted only by the background sweep. `Get` is read-only: it
-   counts live timestamps with a binary search over the sorted prefix and never
+1. **Counted buckets.** A key stores one entry per distinct truncated timestamp,
+   holding the number of events that landed in it, so a key never holds more
+   than `WindowSize / Precision` buckets no matter how many events per second it
+   receives. Repeated events cost an increment rather than memory, and the
+   entry's cached total keeps `Store` returning the live count without a scan.
+   A bucket is twice the size of a bare timestamp, so a key that never receives
+   more than one event per bucket pays about twice the memory it used to; every
+   key above that rate pays less, and the worst case stops growing with traffic.
+2. **Lazy pruning.** Every accepted `Store` prunes the touched key's expired
+   prefix before inserting, so a hot key never accumulates dead buckets. Pruning
+   never removes the key itself: an entry emptied by pruning is immediately
+   refilled by the incoming event, and keys that stop receiving events are
+   deleted only by the background sweep. `Get` is read-only: it discounts the
+   expired prefix from the cached total, located by binary search, and never
    mutates the cache.
-2. **Background sweep.** A janitor goroutine (a `time.Ticker`) periodically scans
-   all shards, prunes expired timestamps, and deletes empty keys.
-3. **Right-sizing and map compaction.** When a key's timestamp slice has a
-   backing array much larger than its live contents, the survivors are copied
-   into a right-sized slice so the large array can be collected instead of being
-   pinned by a re-slice. During a sweep, if a shard's live key count has fallen
-   well below its observed peak, the shard's map is rebuilt into a fresh,
-   right-sized map to release bucket memory to the garbage collector.
+3. **Background sweep.** A janitor goroutine (a `time.Ticker`) periodically scans
+   all shards, prunes expired buckets, and deletes keys left without events.
+4. **Right-sizing and map compaction.** When a key's bucket slice has a backing
+   array much larger than its live contents, the survivors are copied into a
+   right-sized slice so the large array can be collected instead of being pinned
+   by a re-slice. During a sweep, if a shard's live key count has fallen well
+   below its observed peak, the shard's map is rebuilt into a fresh, right-sized
+   map to release hash-bucket memory to the garbage collector.
 
 Call `Close` to stop the janitor when the cache is no longer needed. `Close` is
 idempotent and safe to call concurrently.
