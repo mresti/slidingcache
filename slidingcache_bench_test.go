@@ -44,9 +44,10 @@ func newBenchCache(b *testing.B, cfg Config) *Cache {
 	return c
 }
 
-// BenchmarkStoreSingleKey characterizes the hot-key cost, which is O(live
-// events): with epoch advancing by one second per op, the key holds ~3600 live
-// timestamps, so each prune shifts up to ~3600 int64s (~28KB memmove).
+// BenchmarkStoreSingleKey characterizes the hot-key cost when every op opens a
+// new bucket: with epoch advancing by one second per op, the key holds ~3600
+// live buckets, each op appends one and each prune drops the expired one by
+// re-slicing the long survivor run forward.
 func BenchmarkStoreSingleKey(b *testing.B) {
 	c := benchCache(b)
 	b.ReportAllocs()
@@ -196,9 +197,10 @@ func BenchmarkParallelMixed(b *testing.B) {
 
 // BenchmarkStoreOutOfOrder measures the worst-case ordered-insert cost on a
 // single hot key: the epoch is jittered back by up to 1800s, so events arrive
-// out of order and land mid-slice, forcing a memmove on every insert. HW tracks
+// out of order and land mid-slice, forcing a memmove on every insert that opens
+// a bucket; repeats of an already-populated bucket only increment it. HW tracks
 // i while jitter < window, so events are never late and the entry stays bounded
-// at ~window live timestamps.
+// at ~window live buckets.
 func BenchmarkStoreOutOfOrder(b *testing.B) {
 	jitter := makeJitter(1024)
 	c := benchCache(b)
@@ -328,5 +330,89 @@ func populate(c *Cache, keySet []string) {
 	const epoch = 1_000_000
 	for _, key := range keySet {
 		c.Store(epoch, key)
+	}
+}
+
+// BenchmarkStoreHotKeySameBucket is the regression case for same-bucket
+// inserts: every event lands in one Precision bucket on one key, so an insert
+// that stored one timestamp per event would grow the entry with b.N. With events
+// counted in their bucket, the cost is an increment and must stay
+// b.N-independent, as must the memory.
+func BenchmarkStoreHotKeySameBucket(b *testing.B) {
+	const epoch = 1_000_000
+	c := benchCache(b)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		c.Store(epoch, "hot")
+	}
+}
+
+// BenchmarkStoreMediumCardinalitySameBucket spreads the same-bucket workload
+// over a realistic number of keys: the epoch never advances, so nothing expires
+// and each key keeps counting into its single bucket, while the round-robin
+// over the key set adds map and CPU-cache misses the single-key benchmark
+// hides.
+func BenchmarkStoreMediumCardinalitySameBucket(b *testing.B) {
+	const epoch = 1_000_000
+	for _, keys := range []int{100, 1_000, 10_000} {
+		b.Run(fmt.Sprintf("keys=%d", keys), func(b *testing.B) {
+			c := benchCache(b)
+			keySet := makeKeys(keys)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := range b.N {
+				c.Store(epoch, keySet[i%keys])
+			}
+		})
+	}
+}
+
+// BenchmarkStoreHotKeyNanos models the production hot-key rate: nanosecond
+// epochs advancing 50µs per op on a single key, so ~20k events share each 1s
+// bucket and the 300s window holds at most 300 buckets however many events land
+// in them. The window slides, so entries stay bounded and per-op cost is
+// b.N-independent.
+func BenchmarkStoreHotKeyNanos(b *testing.B) {
+	const (
+		baseEpoch     = 1_700_000_000 * int64(time.Second)
+		nanosPerEvent = 50_000
+	)
+	c := newBenchCache(b, Config{
+		Precision:     time.Second,
+		WindowSize:    300 * time.Second,
+		EpochUnit:     EpochInNanos,
+		SweepInterval: time.Hour, // keep the janitor out of the measurement.
+	})
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := range b.N {
+		c.Store(baseEpoch+int64(i)*nanosPerEvent, "hot")
+	}
+}
+
+// BenchmarkPruneCopyThreshold is the measurement behind pruneCopyMaxLen. Each
+// key receives one event per second and is pruned on every Store, so the
+// survivor run is the window length in buckets: sweeping the window sweeps the
+// entry sizes on both sides of the threshold. Its name is deliberately outside
+// the Store/Get/Sweep/Memory families, so it stays out of throughput comparisons
+// and is run on purpose when the threshold is retuned.
+func BenchmarkPruneCopyThreshold(b *testing.B) {
+	const keys = 8
+	for _, windowSeconds := range []int{60, 130, 200, 300, 600, 3600} {
+		b.Run(fmt.Sprintf("buckets=%d", windowSeconds), func(b *testing.B) {
+			c := newBenchCache(b, Config{
+				Precision:     time.Second,
+				WindowSize:    time.Duration(windowSeconds) * time.Second,
+				EpochUnit:     EpochInSeconds,
+				SweepInterval: time.Hour, // keep the janitor out of the measurement.
+			})
+			keySet := makeKeys(keys)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := range b.N {
+				c.Store(int64(i/keys), keySet[i%keys])
+			}
+		})
 	}
 }

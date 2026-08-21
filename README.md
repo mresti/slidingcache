@@ -60,17 +60,20 @@ func main() {
 type SlidingCache interface {
 	// Store records an event for keyInHash at the window containing epoch and
 	// returns the resulting live count. Returns -1 if the event is late (its
-	// timestamp is outside the live window) and was not stored.
+	// timestamp is outside the live window) and was not stored, or if its
+	// bucket timestamp is outside ±2^(63−CountBits) seconds.
 	Store(epoch int64, keyInHash string) int
 	// Get returns the live count for keyInHash within the sliding window
 	// covering epoch, or 0 if the key does not exist. Returns -1 if epoch itself
-	// is outside the live window.
+	// is outside the live window, or its bucket timestamp is outside
+	// ±2^(63−CountBits) seconds.
 	Get(epoch int64, keyInHash string) int
 }
 ```
 
 Both methods return the sentinel `-1` when the (converted, truncated) timestamp
-falls outside the live window; see [Late events and the `-1` sentinel](#late-events-and-the--1-sentinel).
+falls outside the live window, or outside the representable epoch range; see
+[Late events and the `-1` sentinel](#late-events-and-the--1-sentinel).
 
 `New` returns a `*Cache`, which implements `SlidingCache` and additionally
 exposes `Close() error` to stop the background janitor.
@@ -100,14 +103,25 @@ least the epoch `E` of the call before evaluating liveness, this rule is always
 at least as inclusive as the intuitive window `t >= E - WindowSize` anchored at
 the call itself.
 
-The live count for a key is the number of its alive timestamps.
+The live count for a key is the number of its events with an alive timestamp.
+Events that share a truncated timestamp are counted individually but stored
+once, as a bucket with a count, so a key's memory depends on the window length
+and not on its event rate.
 
-`HW` only ever moves **forward**, and it is never clamped. A single `Store` with
-an epoch in the wrong unit — nanoseconds passed to a cache configured for
-milliseconds, say — pushes `HW` far into the future and makes every subsequent
-real event look late, permanently. There is no reset: the only recovery is to
-build a new cache with `New`. Feed epochs of a single unit matching
-`Config.EpochUnit`.
+`HW` only ever moves **forward**, and it is never clamped, so an epoch in the
+wrong unit drags the window forward with it. `Store` and `Get` reject outright,
+with `-1` and **without touching `HW`**, any epoch whose bucket timestamp falls
+outside `±2^(63−CountBits)` seconds (`±2^43` seconds, about ±278,000 years,
+with the default `CountBits` of 20 — the range a bucket word represents). That
+absorbs the grossest unit mistake: nanoseconds passed to a cache configured for
+seconds land near `1.7e18` seconds and are rejected instead of bricking the
+cache.
+
+A wrong unit that still lands inside the range is not detectable and remains
+destructive: milliseconds passed to a cache configured for seconds push `HW` to
+the year 55,000 and make every subsequent real event look late, permanently.
+There is no reset: the only recovery is to build a new cache with `New`. Feed
+epochs of a single unit matching `Config.EpochUnit`.
 
 A cache on which `Store` has never been called starts with its high-water mark
 below every usable epoch, so its first event is accepted whatever its value;
@@ -118,9 +132,9 @@ negative infinity, so buckets have a uniform width on both sides of zero.
 
 ### Out-of-order tolerance
 
-Events may arrive in any order. A timestamp is inserted into the key's sorted
-list via binary search, so an older-but-still-live event stored after a newer
-one is counted normally.
+Events may arrive in any order. An event is counted into the bucket of its
+truncated timestamp, located by binary search in the key's sorted bucket list,
+so an older-but-still-live event stored after a newer one is counted normally.
 
 ### Late events and the `-1` sentinel
 
@@ -138,6 +152,16 @@ live count, or `0` if the key does not exist.
 Because the boundary is strict, a timestamp exactly `WindowSize` seconds behind
 the high-water mark yields `-1`. Callers should treat any negative return value
 as the late/out-of-window sentinel rather than a count.
+
+The same `-1` covers the second rejection: an epoch whose bucket timestamp,
+after conversion to seconds and truncation, falls outside `±2^(63−CountBits)`
+seconds (`±2^43` seconds with the default `CountBits` of 20) does not fit the
+packed bucket word, so `Store` refuses it before consulting the high-water mark
+and `Get` refuses to query with it. The check applies to the converted
+timestamp, not to the raw argument, so the usable range of `epoch` depends on
+`EpochUnit`: with the default `CountBits`, `±2^43` seconds, `±2^43 * 1e3`
+milliseconds, and the whole `int64` in nanoseconds (`±2^43` seconds already
+exceeds it). See [`CountBits` and the epoch range](#countbits-and-the-epoch-range).
 
 ### `Get` and the high-water mark
 
@@ -157,12 +181,50 @@ whose high-water mark has advanced past `WindowSize` returns `-1`.
 | `EpochUnit`     | `EpochUnit`     | no       | `EpochInMillis` (0) | Unit of the `epoch` arguments: `EpochInMillis`, `EpochInNanos`, or `EpochInSeconds`. Defaults to milliseconds (`time.Now().UnixMilli()`). |
 | `Shards`        | `int`           | no       | `16`               | Number of internal shards; rounded up to a power of two. Must be between `0` and `1048576` (`1<<20`). See [Choosing `Shards`](#choosing-shards). |
 | `SweepInterval` | `time.Duration` | no       | `WindowSize`       | Period of the background janitor. May be sub-second (useful in tests). Must be `>= 0`. |
+| `CountBits`     | `int`           | no       | `20`               | Width of the per-bucket event count inside a bucket word; the other `63−CountBits` bits hold the bucket timestamp in seconds. Must be `0` (the default) or between `8` and `24`. See [`CountBits` and the epoch range](#countbits-and-the-epoch-range). |
 
 `Precision` and `WindowSize` must be positive, whole-second durations: sub-second
 values (e.g. `500ms`) or non-whole-second values (e.g. `1500ms`) are rejected
 rather than silently rounded. Internally they are converted once to integer
 seconds, so there is no per-operation cost. `New` validates the configuration
 and returns an error for any invalid value.
+
+Epochs are validated per call rather than at configuration time: whatever the
+`EpochUnit`, an `epoch` whose bucket timestamp lands outside
+`±2^(63−CountBits)` seconds is rejected with `-1` and leaves the high-water mark
+untouched. See [Late events and the `-1` sentinel](#late-events-and-the--1-sentinel).
+
+### `CountBits` and the epoch range
+
+A bucket word is one `int64`: the low `CountBits` bits hold how many events
+landed in the bucket, the remaining `63−CountBits` bits hold the bucket
+timestamp in seconds. `CountBits` moves that split, trading events per bucket
+against the range of epochs the cache accepts:
+
+| CountBits | events per bucket before spill | timestamp bits | Unix-seconds epochs usable until |
+|-----------|-------------------------------|----------------|----------------------------------|
+| 8 | 255 | 55 | year ~1.1e9 |
+| 12 | 4,095 | 51 | year ~7.1e7 |
+| 16 | 65,535 | 47 | year ~4.5e6 |
+| 20 (default) | 1,048,575 | 43 | year 280,707 |
+| 24 | 16,777,215 | 39 | year 19,391 |
+
+The range is expressed in **seconds of bucket timestamp whatever the
+`EpochUnit`**, and it is symmetric around the epoch: the cache accepts bucket
+timestamps within `±2^(63−CountBits)` seconds. An epoch outside it makes `Store`
+and `Get` return `-1` **without advancing the high-water mark**.
+
+The upper bound of `24` keeps at least 39 timestamp bits, so every epoch an
+`int64` of nanoseconds can express (up to 2262-04-11) still fits with room to
+spare. Past it the timestamp range erodes toward dates real deployments reach —
+32 count bits would stop at 2038-01-19 — which is why wider counts are
+rejected.
+
+Below the default, the timestamp range gained is one nobody needs, while the
+spills bought are real: a bucket that outgrows its count continues into further
+words with the same timestamp. That stays correct, but it costs memory. A key
+taking 20,000 events per bucket needs 79 words per bucket at `CountBits: 8` —
+about 185 KB over a 300-bucket window — against 2.3 KB at 16 or 20.
 
 ### Choosing `Shards`
 
@@ -211,23 +273,32 @@ return an error. Omitting the option keeps the default FNV-1a.
 
 Go maps and slices never shrink their backing storage on their own, so a naive
 counter accumulates memory under churn. `slidingcache` keeps its footprint
-bounded through three mechanisms:
+bounded through four mechanisms:
 
-1. **Lazy pruning.** Every accepted `Store` prunes the touched key's expired
-   prefix before inserting, so a hot key never accumulates dead timestamps.
-   Pruning never removes the key itself: an entry emptied by pruning is
-   immediately refilled by the incoming event, and keys that stop receiving
-   events are deleted only by the background sweep. `Get` is read-only: it
-   counts live timestamps with a binary search over the sorted prefix and never
+1. **Counted buckets.** A key stores one entry per distinct truncated timestamp,
+   holding the number of events that landed in it, so a key never holds more
+   than `WindowSize / Precision` buckets no matter how many events per second it
+   receives. Repeated events cost an increment rather than memory, and the
+   entry's cached total keeps `Store` returning the live count without a scan.
+   A bucket is one 8-byte word holding both the timestamp and the count, so a
+   key that never receives more than one event per bucket costs the same memory
+   as a bare timestamp per event plus the entry's cached total, and every key
+   above that rate pays less.
+2. **Lazy pruning.** Every accepted `Store` prunes the touched key's expired
+   prefix before inserting, so a hot key never accumulates dead buckets. Pruning
+   never removes the key itself: an entry emptied by pruning is immediately
+   refilled by the incoming event, and keys that stop receiving events are
+   deleted only by the background sweep. `Get` is read-only: it discounts the
+   expired prefix from the cached total, located by binary search, and never
    mutates the cache.
-2. **Background sweep.** A janitor goroutine (a `time.Ticker`) periodically scans
-   all shards, prunes expired timestamps, and deletes empty keys.
-3. **Right-sizing and map compaction.** When a key's timestamp slice has a
-   backing array much larger than its live contents, the survivors are copied
-   into a right-sized slice so the large array can be collected instead of being
-   pinned by a re-slice. During a sweep, if a shard's live key count has fallen
-   well below its observed peak, the shard's map is rebuilt into a fresh,
-   right-sized map to release bucket memory to the garbage collector.
+3. **Background sweep.** A janitor goroutine (a `time.Ticker`) periodically scans
+   all shards, prunes expired buckets, and deletes keys left without events.
+4. **Right-sizing and map compaction.** When a key's bucket slice has a backing
+   array much larger than its live contents, the survivors are copied into a
+   right-sized slice so the large array can be collected instead of being pinned
+   by a re-slice. During a sweep, if a shard's live key count has fallen well
+   below its observed peak, the shard's map is rebuilt into a fresh, right-sized
+   map to release hash-bucket memory to the garbage collector.
 
 Call `Close` to stop the janitor when the cache is no longer needed. `Close` is
 idempotent and safe to call concurrently.
