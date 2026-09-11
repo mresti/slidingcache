@@ -11,8 +11,42 @@ type entry struct {
 // insert places timestamp into the sorted slice, preserving ascending order.
 // Using an ordered insert keeps prune a cheap prefix operation even when events
 // arrive out of order.
+//
+// It is the composition of inOrder, appendInOrder and insertOutOfOrder. The hot
+// path in shard.store calls those three directly instead of insert: each of them
+// fits the inliner's budget on its own, while a single function that both
+// appends and calls the out-of-order path does not, and would cost a call on
+// every Store.
 func (e *entry) insert(timestamp int64) {
-	i := e.lowerBound(timestamp)
+	if e.inOrder(timestamp) {
+		e.appendInOrder(timestamp)
+		return
+	}
+	e.insertOutOfOrder(timestamp)
+}
+
+// inOrder reports whether timestamp is at least as new as every stored one,
+// which includes repeats of the newest timestamp. Such arrivals can be appended
+// without shifting anything.
+func (e *entry) inOrder(timestamp int64) bool {
+	n := len(e.timestamps)
+	return n == 0 || timestamp >= e.timestamps[n-1]
+}
+
+// appendInOrder appends a timestamp for which inOrder returned true.
+func (e *entry) appendInOrder(timestamp int64) {
+	e.timestamps = append(e.timestamps, timestamp)
+}
+
+// insertOutOfOrder places a timestamp older than the newest one at its upper
+// bound: the first index holding a greater value. Duplicates therefore land
+// after the existing run of equal timestamps rather than before it, so only
+// genuinely out-of-order events pay the shift; without that, every event landing
+// in an already-populated Precision bucket would memmove the whole run, making a
+// hot key quadratic. timestamp+1 cannot overflow: timestamp is below the newest
+// stored value.
+func (e *entry) insertOutOfOrder(timestamp int64) {
+	i := e.lowerBound(timestamp + 1)
 	e.timestamps = append(e.timestamps, 0)
 	copy(e.timestamps[i+1:], e.timestamps[i:])
 	e.timestamps[i] = timestamp

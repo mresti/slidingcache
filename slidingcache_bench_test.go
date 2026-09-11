@@ -330,3 +330,59 @@ func populate(c *Cache, keySet []string) {
 		c.Store(epoch, key)
 	}
 }
+
+// BenchmarkStoreHotKeySameBucket is the regression case for same-bucket
+// inserts: every event lands in one Precision bucket on one key, so an insert
+// that placed duplicates before the existing run would memmove the whole run and
+// make per-op cost grow with b.N. With duplicates appended, the cost is an
+// amortized append and must stay b.N-independent.
+func BenchmarkStoreHotKeySameBucket(b *testing.B) {
+	const epoch = 1_000_000
+	c := benchCache(b)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		c.Store(epoch, "hot")
+	}
+}
+
+// BenchmarkStoreMediumCardinalitySameBucket spreads the same-bucket workload
+// over a realistic number of keys: the epoch never advances, so nothing expires
+// and each key accumulates duplicates, while the round-robin over the key set
+// adds map and CPU-cache misses the single-key benchmark hides.
+func BenchmarkStoreMediumCardinalitySameBucket(b *testing.B) {
+	const epoch = 1_000_000
+	for _, keys := range []int{100, 1_000, 10_000} {
+		b.Run(fmt.Sprintf("keys=%d", keys), func(b *testing.B) {
+			c := benchCache(b)
+			keySet := makeKeys(keys)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := range b.N {
+				c.Store(epoch, keySet[i%keys])
+			}
+		})
+	}
+}
+
+// BenchmarkStoreHotKeyNanos models the production hot-key rate: nanosecond
+// epochs advancing 50µs per op on a single key, so ~20k events share each 1s
+// bucket and the 300s window holds ~6M live timestamps. The window slides, so
+// entries stay bounded and per-op cost is b.N-independent.
+func BenchmarkStoreHotKeyNanos(b *testing.B) {
+	const (
+		baseEpoch     = 1_700_000_000 * int64(time.Second)
+		nanosPerEvent = 50_000
+	)
+	c := newBenchCache(b, Config{
+		Precision:     time.Second,
+		WindowSize:    300 * time.Second,
+		EpochUnit:     EpochInNanos,
+		SweepInterval: time.Hour, // keep the janitor out of the measurement.
+	})
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := range b.N {
+		c.Store(baseEpoch+int64(i)*nanosPerEvent, "hot")
+	}
+}
