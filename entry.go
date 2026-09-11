@@ -1,28 +1,81 @@
 package slidingcache
 
-// bucket is one Precision bucket of a key together with the number of events
-// recorded in it. Events that share a bucket are indistinguishable to the window
-// semantics, so storing a count instead of one timestamp per event is lossless.
-type bucket struct {
-	timestamp int64
-	count     int
+// bucket packs one Precision bucket of a key into a single 8-byte word: the
+// bucket timestamp in the high bits and the number of events that landed in it
+// in the low countBits.
+//
+// Events that share a bucket are indistinguishable to the window semantics, so
+// storing a count instead of one timestamp per event is lossless. Packing that
+// count next to the timestamp instead of beside it in a struct halves the size
+// of a bucket, and keeps ordering comparisons a plain integer comparison on the
+// word: the timestamp occupies the most significant bits, so a larger timestamp
+// always makes a larger word whatever the count.
+//
+// The count occupying the low bits also makes counting one more event into a
+// bucket an increment of the word itself, which is what the record methods do
+// once accepts has confirmed there is room; incrementing a full count would
+// carry into the timestamp instead.
+type bucket int64
+
+const (
+	// countBits is the width of the event count inside a bucket word. Every
+	// dependency on it goes through the constants and helpers declared here, so
+	// that the width remains a single decision.
+	countBits = 20
+	// maxBucketCount is the largest count one word holds. A bucket that reaches
+	// it spills into a further word with the same timestamp, so no event is
+	// lost; reaching it takes more than a million events in one Precision
+	// window.
+	maxBucketCount = 1<<countBits - 1
+	// maxBucketTimestamp and minBucketTimestamp bound the bucket timestamps, in
+	// seconds, that fit in the high bits of a word: about +-278,000 years around
+	// the epoch. Store and Get reject anything beyond them.
+	maxBucketTimestamp = 1<<(63-countBits) - 1
+	minBucketTimestamp = -1 << (63 - countBits)
+)
+
+// newBucket packs a bucket timestamp and an event count into one word. The
+// timestamp must be within [minBucketTimestamp, maxBucketTimestamp], which Store
+// and Get guarantee by rejecting epochs outside that range.
+func newBucket(timestamp int64, count int) bucket {
+	return bucket(timestamp<<countBits | int64(count))
 }
+
+func (b bucket) timestamp() int64 { return int64(b) >> countBits }
+
+func (b bucket) count() int { return int(int64(b) & maxBucketCount) }
+
+func (b bucket) full() bool { return b.count() == maxBucketCount }
+
+// accepts reports whether one more event at timestamp can be counted into b,
+// which requires b to be the bucket of that timestamp and to have room left.
+func (b bucket) accepts(timestamp int64) bool {
+	return b.timestamp() == timestamp && !b.full()
+}
+
+// bucketFloor is the smallest word whose timestamp is timestamp, used as a
+// binary-search target so the search compares packed words without unpacking
+// them. It is only meaningful for a timestamp within the representable range,
+// which lowerBound checks before calling it.
+func bucketFloor(timestamp int64) bucket { return bucket(timestamp << countBits) }
 
 // entry holds the buckets of a single key.
 //
 // Invariants, maintained by every method below:
 //
-//   - buckets is sorted strictly ascending by timestamp: no two buckets share a
-//     timestamp, so a bucket is the unique home of its Precision window.
+//   - buckets is sorted by timestamp, non-decreasing. Adjacent buckets share a
+//     timestamp only when the earlier one is full, which is how a bucket that
+//     outgrows the count of one word spills into the next.
 //   - every count is >= 1: a bucket exists only once an event landed in it.
 //   - total equals the sum of the counts, expired buckets included. It is the
 //     number of events physically retained, which liveCount and prune keep in
 //     step with the slice.
 //   - len(buckets) is bounded by WindowSize/Precision once the key has been
 //     pruned, regardless of the event rate, because the live window spans that
-//     many distinct timestamps. Between a prune and the next one the length may
-//     exceed the bound by the expired prefix, which the next Store or sweep of
-//     the key drops.
+//     many distinct timestamps, plus one extra word per maxBucketCount events
+//     that a single timestamp receives. Between a prune and the next one the
+//     length may exceed the bound by the expired prefix, which the next Store or
+//     sweep of the key drops.
 type entry struct {
 	buckets []bucket
 	total   int
@@ -30,7 +83,7 @@ type entry struct {
 
 // newEntry returns the entry of a key whose first event landed at timestamp.
 func newEntry(timestamp int64) *entry {
-	return &entry{buckets: []bucket{{timestamp: timestamp, count: 1}}, total: 1}
+	return &entry{buckets: []bucket{newBucket(timestamp, 1)}, total: 1}
 }
 
 // insert records one event at timestamp.
@@ -54,44 +107,51 @@ func (e *entry) insert(timestamp int64) {
 // searching or shifting anything.
 func (e *entry) inOrder(timestamp int64) bool {
 	n := len(e.buckets)
-	return n == 0 || timestamp >= e.buckets[n-1].timestamp
+	return n == 0 || timestamp >= e.buckets[n-1].timestamp()
 }
 
 // recordInOrder counts an event for which inOrder returned true: it increments
 // the newest bucket when the event repeats it, and appends a new bucket
-// otherwise. A hot key therefore pays an increment per event rather than a slice
-// growth, and its bucket count tracks elapsed time instead of event volume.
+// otherwise, whether because the timestamp is new or because the newest bucket
+// has no room left. A hot key therefore pays an increment per event rather than
+// a slice growth, and its bucket count tracks elapsed time instead of event
+// volume.
 func (e *entry) recordInOrder(timestamp int64) {
 	e.total++
-	if n := len(e.buckets); n > 0 && e.buckets[n-1].timestamp == timestamp {
-		e.buckets[n-1].count++
+	if n := len(e.buckets); n > 0 && e.buckets[n-1].accepts(timestamp) {
+		e.buckets[n-1]++
 		return
 	}
-	e.buckets = append(e.buckets, bucket{timestamp: timestamp, count: 1})
+	e.buckets = append(e.buckets, newBucket(timestamp, 1))
 }
 
 // recordOutOfOrder counts an event older than the newest bucket. It increments
-// the bucket at the event's timestamp, or creates that bucket in sorted position
-// when the event is the first to land in it. Only a genuinely new bucket pays
-// the shift; repeats of an existing one cost an increment, so a hot key that
-// receives jittered timestamps cannot degrade into a memmove per event.
+// the first word of the event's timestamp that still has room, and creates a
+// word in sorted position when the timestamp has none: either because no event
+// had landed in it yet, or because every word it already owns is full. Only such
+// a new word pays the shift; repeats of an existing bucket cost an increment, so
+// a hot key that receives jittered timestamps cannot degrade into a memmove per
+// event.
 func (e *entry) recordOutOfOrder(timestamp int64) {
 	e.total++
 	i := e.lowerBound(timestamp)
-	if i < len(e.buckets) && e.buckets[i].timestamp == timestamp {
-		e.buckets[i].count++
-		return
+	for ; i < len(e.buckets) && e.buckets[i].timestamp() == timestamp; i++ {
+		if !e.buckets[i].full() {
+			e.buckets[i]++
+			return
+		}
 	}
-	e.buckets = append(e.buckets, bucket{})
+	e.buckets = append(e.buckets, 0)
 	copy(e.buckets[i+1:], e.buckets[i:])
-	e.buckets[i] = bucket{timestamp: timestamp, count: 1}
+	e.buckets[i] = newBucket(timestamp, 1)
 }
 
 // firstAlive returns the index of the first bucket that is still alive
 // (timestamp > cutoff). Because the slice is sorted, expired buckets form a
 // prefix, so the index doubles as the length of that prefix. cutoff+1 cannot
 // overflow: cutoff is derived from a high-water mark minus a WindowSize of at
-// least one second.
+// least one second, and lowerBound saturates on a cutoff that lies outside the
+// representable bucket range.
 func (e *entry) firstAlive(cutoff int64) int {
 	return e.lowerBound(cutoff + 1)
 }
@@ -107,21 +167,36 @@ func (e *entry) firstAlive(cutoff int64) int {
 func (e *entry) liveCount(cutoff int64) int {
 	live := e.total
 	for i := range e.firstAlive(cutoff) {
-		live -= e.buckets[i].count
+		live -= e.buckets[i].count()
 	}
 	return live
 }
 
 // lowerBound returns the index of the first bucket with a timestamp >= target,
-// or len when there is none. It is hand-rolled rather than delegating to
-// slices.BinarySearchFunc so that it stays within the inliner's budget: every
-// read and write of an entry goes through it, and the call overhead dominates
-// for the short slices that a bounded window produces.
+// or len when there is none. It compares packed words against the word target
+// floors to, so the search never unpacks a bucket.
+//
+// A target outside the representable range saturates instead of being packed:
+// shifting it into a word would overflow and wrap the comparison around. This is
+// not hypothetical, because firstAlive derives its target from a cutoff, and the
+// cutoff of a cache that has not yet observed an epoch sits at math.MinInt64.
+//
+// The search is hand-rolled rather than delegating to slices.BinarySearchFunc so
+// that it stays within the inliner's budget: every read and write of an entry
+// goes through it, and the call overhead dominates for the short slices that a
+// bounded window produces.
 func (e *entry) lowerBound(target int64) int {
+	if target <= minBucketTimestamp {
+		return 0
+	}
+	if target > maxBucketTimestamp {
+		return len(e.buckets)
+	}
+	floor := bucketFloor(target)
 	low, high := 0, len(e.buckets)
 	for low < high {
 		mid := int(uint(low+high) >> 1)
-		if e.buckets[mid].timestamp < target {
+		if e.buckets[mid] < floor {
 			low = mid + 1
 		} else {
 			high = mid
@@ -152,7 +227,7 @@ func (e *entry) prune(cutoff int64) {
 		return
 	}
 	for i := range firstAlive {
-		e.total -= e.buckets[i].count
+		e.total -= e.buckets[i].count()
 	}
 	if firstAlive == len(e.buckets) {
 		if shouldRightSize(cap(e.buckets), 0) {
@@ -186,7 +261,7 @@ func (e *entry) prune(cutoff int64) {
 // and the cycle repeats: a reallocation and copy on nearly every prune. Above
 // 256 the quarter growth never trips the rule and the re-slice stays free,
 // amortizing its reallocation over many appends. Sweeping the threshold over
-// entries of 20 to 3600 buckets confirms it: 256 (a 4KB memmove) is the largest
+// entries of 20 to 3600 buckets confirms it: 256 (a 2KB memmove) is the largest
 // value that never loses, removing up to 5x of churn on a ~200-bucket key, while
 // 1024 makes the memmove dominate. BenchmarkPruneCopyThreshold reproduces the
 // sweep.

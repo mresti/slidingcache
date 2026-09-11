@@ -826,20 +826,30 @@ func TestFirstStoreOnFreshCacheAcceptsNegativeEpoch(t *testing.T) {
 
 // TestUnobservedHighWaterDoesNotUnderflow exercises every reader of the
 // high-water mark against its "never stored" value, where a plain
-// HW - WindowSize subtraction would wrap around.
+// HW - WindowSize subtraction would wrap around, and pins where the usable
+// epoch range now begins: math.MinInt64+1 has no representable bucket and is
+// rejected, minBucketTimestamp is the oldest epoch a cache accepts.
 func TestUnobservedHighWaterDoesNotUnderflow(t *testing.T) {
 	c := newTestCache(t, Config{Precision: time.Second, WindowSize: 60 * time.Second, EpochUnit: EpochInSeconds})
 
-	if got := c.Get(math.MinInt64+1, "absent"); got != 0 {
-		t.Fatalf("Get on a fresh cache = %d, want 0", got)
+	if got := c.Get(math.MinInt64+1, "absent"); got != lateEvent {
+		t.Fatalf("Get below the representable range = %d, want %d", got, lateEvent)
+	}
+	if got := c.Store(math.MinInt64+1, "k"); got != lateEvent {
+		t.Fatalf("Store below the representable range = %d, want %d", got, lateEvent)
 	}
 	c.sweep()
 	if got := c.totalKeys(); got != 0 {
 		t.Fatalf("totalKeys after sweeping a fresh cache = %d, want 0", got)
 	}
-	if got := c.Store(math.MinInt64+1, "k"); got != 1 {
-		t.Fatalf("Store at the smallest usable epoch = %d, want 1", got)
+
+	if got := c.Store(minBucketTimestamp, "k"); got != 1 {
+		t.Fatalf("Store at the oldest representable epoch = %d, want 1", got)
 	}
+	if got := c.Get(minBucketTimestamp, "k"); got != 1 {
+		t.Fatalf("Get at the oldest representable epoch = %d, want 1", got)
+	}
+	c.sweep()
 }
 
 // TestGetIsReadOnlyAndOnlySweepRemovesDeadKeys pins the cleanup contract: Get
@@ -918,8 +928,18 @@ func (m *windowModel) alive(timestamp int64) bool {
 	return !m.observed || timestamp > m.highWater-m.windowSize
 }
 
+// representableTimestamp mirrors the cache's rejection of epochs whose bucket
+// timestamp does not fit a bucket word. It is part of the public contract, so
+// the model has to reproduce it to stay comparable.
+func representableTimestamp(timestamp int64) bool {
+	return timestamp >= minBucketTimestamp && timestamp <= maxBucketTimestamp
+}
+
 func (m *windowModel) store(epoch int64, key string) int {
 	timestamp := m.bucket(epoch)
+	if !representableTimestamp(timestamp) {
+		return lateEvent
+	}
 	if !m.observed || timestamp > m.highWater {
 		m.highWater = timestamp
 		m.observed = true
@@ -932,7 +952,8 @@ func (m *windowModel) store(epoch int64, key string) int {
 }
 
 func (m *windowModel) get(epoch int64, key string) int {
-	if !m.alive(m.bucket(epoch)) {
+	timestamp := m.bucket(epoch)
+	if !representableTimestamp(timestamp) || !m.alive(timestamp) {
 		return lateEvent
 	}
 	return m.count(key)
@@ -967,6 +988,11 @@ func FuzzStoreGetInvariants(f *testing.F) {
 		// out-of-order arrival lands on a bucket that earlier prunes may already
 		// have dropped.
 		{1_700_000_000, []byte{128, 128, 136, 136, 144, 128, 120, 128}},
+		// Bases at both ends of the representable bucket range, where the offsets
+		// fuzzOperand adds push some epochs past the boundary and both the cache
+		// and the model must reject them.
+		{maxBucketTimestamp, []byte{248, 128, 0, 252, 8, 244}},
+		{minBucketTimestamp + 1, []byte{0, 8, 128, 248, 4, 252}},
 	}
 	for _, seed := range seeds {
 		f.Add(seed.base, seed.ops)
@@ -976,15 +1002,16 @@ func FuzzStoreGetInvariants(f *testing.F) {
 		const (
 			precision  = 10
 			windowSize = 60
-			epochScale = 1 << 40
 			maxFuzzOps = 256
 		)
 
-		// Epochs are kept well inside int64 so the reference model's arithmetic
-		// cannot overflow; the semantics under test do not depend on scale. A
-		// bounded op count keeps every execution fast, which buys more coverage
-		// than replaying arbitrarily long inputs.
-		base %= epochScale
+		// The base is folded into the representable bucket range, so the offsets
+		// fuzzOperand adds stay well inside int64 and cannot overflow the
+		// reference model's arithmetic, while a base at either end still produces
+		// the out-of-range epochs both implementations must reject. A bounded op
+		// count keeps every execution fast, which buys more coverage than
+		// replaying arbitrarily long inputs.
+		base %= maxBucketTimestamp + 1
 		if len(ops) > maxFuzzOps {
 			ops = ops[:maxFuzzOps]
 		}
@@ -1114,7 +1141,7 @@ func TestEntryRecordOutOfOrderIncrementsExistingBucket(t *testing.T) {
 	if got, want := len(e.buckets), 3; got != want {
 		t.Fatalf("buckets after repeating an older one = %d, want %d", got, want)
 	}
-	if got, want := e.buckets[1].count, 2; got != want {
+	if got, want := e.buckets[1].count(), 2; got != want {
 		t.Fatalf("count of the repeated bucket = %d, want %d", got, want)
 	}
 
@@ -1330,25 +1357,44 @@ func TestStoreSameBucketBoundedMemory(t *testing.T) {
 }
 
 // requireEntryInvariants asserts the invariants documented on entry: buckets
-// sorted strictly ascending, every count positive, and total equal to their sum.
+// sorted by non-decreasing timestamp, a repeated timestamp only after a full
+// bucket, every count positive, and total equal to their sum.
 func requireEntryInvariants(t *testing.T, e *entry) {
 	t.Helper()
 
 	sum := 0
 	for i, b := range e.buckets {
-		if i > 0 && b.timestamp <= e.buckets[i-1].timestamp {
-			t.Fatalf(
-				"bucket %d has timestamp %d, want strictly greater than %d",
-				i, b.timestamp, e.buckets[i-1].timestamp,
-			)
+		if i > 0 {
+			requireOrderedAfterPrevious(t, e, i)
 		}
-		if b.count < 1 {
-			t.Fatalf("bucket %d (timestamp %d) has count %d, want >= 1", i, b.timestamp, b.count)
+		if b.count() < 1 {
+			t.Fatalf("bucket %d (timestamp %d) has count %d, want >= 1", i, b.timestamp(), b.count())
 		}
-		sum += b.count
+		sum += b.count()
 	}
 	if e.total != sum {
 		t.Fatalf("total = %d, want %d (the sum of the bucket counts)", e.total, sum)
+	}
+}
+
+// requireOrderedAfterPrevious asserts that the bucket at index sits legally
+// after its predecessor: a later timestamp, or the same one when the
+// predecessor is full and this bucket is its spill.
+func requireOrderedAfterPrevious(t *testing.T, e *entry, index int) {
+	t.Helper()
+
+	current, previous := e.buckets[index], e.buckets[index-1]
+	if current.timestamp() < previous.timestamp() {
+		t.Fatalf(
+			"bucket %d has timestamp %d, want >= %d",
+			index, current.timestamp(), previous.timestamp(),
+		)
+	}
+	if current.timestamp() == previous.timestamp() && !previous.full() {
+		t.Fatalf(
+			"bucket %d repeats timestamp %d after a bucket holding %d events, want a repeat only after a full one",
+			index, current.timestamp(), previous.count(),
+		)
 	}
 }
 
@@ -1357,8 +1403,8 @@ func requireEntryInvariants(t *testing.T, e *entry) {
 func (e *entry) expanded() []int64 {
 	var out []int64
 	for _, b := range e.buckets {
-		for range b.count {
-			out = append(out, b.timestamp)
+		for range b.count() {
+			out = append(out, b.timestamp())
 		}
 	}
 	return out
@@ -1424,5 +1470,204 @@ func TestStoreSameBucketCountsEveryEvent(t *testing.T) {
 	}
 	if got := c.Get(afterWindow, "edge"); got != 4 {
 		t.Fatalf("Get(edge) = %d, want 4", got)
+	}
+}
+
+// TestBucketPackRoundTrip pins the packing contract a bucket word rests on: a
+// timestamp and a count go in and come back out unchanged across the whole
+// representable range, and the packed words order by timestamp alone, which is
+// what lets lowerBound compare them without unpacking.
+func TestBucketPackRoundTrip(t *testing.T) {
+	timestamps := []int64{minBucketTimestamp, -1, 0, 1, 1_700_000_000, maxBucketTimestamp}
+	counts := []int{1, 2, maxBucketCount}
+
+	for _, timestamp := range timestamps {
+		for _, count := range counts {
+			b := newBucket(timestamp, count)
+			if got := b.timestamp(); got != timestamp {
+				t.Fatalf("newBucket(%d, %d).timestamp() = %d, want %d", timestamp, count, got, timestamp)
+			}
+			if got := b.count(); got != count {
+				t.Fatalf("newBucket(%d, %d).count() = %d, want %d", timestamp, count, got, count)
+			}
+			if got, want := b.full(), count == maxBucketCount; got != want {
+				t.Fatalf("newBucket(%d, %d).full() = %t, want %t", timestamp, count, got, want)
+			}
+		}
+	}
+
+	for i := 1; i < len(timestamps); i++ {
+		older, newer := newBucket(timestamps[i-1], maxBucketCount), newBucket(timestamps[i], 1)
+		if older >= newer {
+			t.Fatalf(
+				"newBucket(%d, %d) is not below newBucket(%d, 1): a full count must not outrank a later timestamp",
+				timestamps[i-1], maxBucketCount, timestamps[i],
+			)
+		}
+	}
+
+	// Counting one more event is an increment of the whole word, which the
+	// record methods rely on; it must move the count and leave the timestamp.
+	counted := newBucket(1_700_000_000, 1)
+	counted++
+	if got, want := counted.timestamp(), int64(1_700_000_000); got != want {
+		t.Fatalf("timestamp after incrementing the word = %d, want %d", got, want)
+	}
+	if got, want := counted.count(), 2; got != want {
+		t.Fatalf("count after incrementing the word = %d, want %d", got, want)
+	}
+}
+
+// TestEntrySpillsWhenBucketIsFull covers the only case in which two buckets may
+// share a timestamp: a bucket whose count fills its word spills into a further
+// word, in order, so that no event is lost and expiry still drops the whole
+// timestamp at once.
+func TestEntrySpillsWhenBucketIsFull(t *testing.T) {
+	t.Run("in order", func(t *testing.T) {
+		e := &entry{buckets: []bucket{newBucket(10, maxBucketCount)}, total: maxBucketCount}
+
+		e.insert(10)
+
+		if got, want := len(e.buckets), 2; got != want {
+			t.Fatalf("buckets after filling one = %d, want %d", got, want)
+		}
+		if got, want := e.buckets[1].timestamp(), int64(10); got != want {
+			t.Fatalf("timestamp of the spill bucket = %d, want %d", got, want)
+		}
+		if got, want := e.buckets[1].count(), 1; got != want {
+			t.Fatalf("count of the spill bucket = %d, want %d", got, want)
+		}
+		if got, want := e.total, maxBucketCount+1; got != want {
+			t.Fatalf("total = %d, want %d", got, want)
+		}
+		requireEntryInvariants(t, e)
+	})
+
+	t.Run("out of order", func(t *testing.T) {
+		e := &entry{
+			buckets: []bucket{newBucket(10, maxBucketCount), newBucket(20, 1)},
+			total:   maxBucketCount + 1,
+		}
+
+		e.insert(10)
+
+		if got, want := len(e.buckets), 3; got != want {
+			t.Fatalf("buckets after spilling an older one = %d, want %d", got, want)
+		}
+		if got, want := e.buckets[1].timestamp(), int64(10); got != want {
+			t.Fatalf("timestamp at index 1 = %d, want %d (the spill belongs beside its bucket)", got, want)
+		}
+		if got, want := e.buckets[2].timestamp(), int64(20); got != want {
+			t.Fatalf("timestamp at index 2 = %d, want %d", got, want)
+		}
+		requireEntryInvariants(t, e)
+
+		if got, want := e.liveCount(9), maxBucketCount+2; got != want {
+			t.Fatalf("liveCount(9) = %d, want %d", got, want)
+		}
+		if got, want := e.liveCount(10), 1; got != want {
+			t.Fatalf("liveCount(10) = %d, want %d (both words of bucket 10 expire together)", got, want)
+		}
+
+		e.prune(10)
+
+		if got, want := len(e.buckets), 1; got != want {
+			t.Fatalf("buckets after pruning at 10 = %d, want %d", got, want)
+		}
+		if got, want := e.total, 1; got != want {
+			t.Fatalf("total after pruning at 10 = %d, want %d", got, want)
+		}
+		requireEntryInvariants(t, e)
+	})
+}
+
+// TestLowerBoundSaturatesOutsideRange pins that a search target outside the
+// representable bucket range saturates rather than being packed into a word,
+// where the shift would overflow and wrap the comparison around. A fresh cache
+// reaches this: its cutoff sits at math.MinInt64.
+func TestLowerBoundSaturatesOutsideRange(t *testing.T) {
+	e := entryWithBuckets(4, 10, 20, 30)
+
+	cases := []struct {
+		name   string
+		target int64
+		want   int
+	}{
+		{"far below the range", math.MinInt64, 0},
+		{"oldest representable", minBucketTimestamp, 0},
+		{"inside", 25, 2},
+		{"newest representable", maxBucketTimestamp, len(e.buckets)},
+		{"just above the range", maxBucketTimestamp + 1, len(e.buckets)},
+		{"far above the range", math.MaxInt64, len(e.buckets)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := e.lowerBound(tc.target); got != tc.want {
+				t.Fatalf("lowerBound(%d) = %d, want %d", tc.target, got, tc.want)
+			}
+		})
+	}
+
+	if got := e.firstAlive(math.MinInt64); got != 0 {
+		t.Fatalf("firstAlive at the cutoff of a fresh cache = %d, want 0", got)
+	}
+	if got, want := e.liveCount(math.MinInt64), 3; got != want {
+		t.Fatalf("liveCount at the cutoff of a fresh cache = %d, want %d", got, want)
+	}
+}
+
+// TestOutOfRangeEpochIsRejectedWithoutAdvancingHighWater pins the guard that
+// keeps a wrong-unit epoch from bricking a cache: an epoch whose bucket
+// timestamp does not fit a bucket word is rejected before the high-water mark
+// is consulted, so the window stays where the real events put it.
+func TestOutOfRangeEpochIsRejectedWithoutAdvancingHighWater(t *testing.T) {
+	c := newTestCache(t, Config{Precision: time.Second, WindowSize: 300 * time.Second, EpochUnit: EpochInSeconds})
+
+	if got := c.Store(1_700_000_000, "k"); got != 1 {
+		t.Fatalf("Store at a real epoch = %d, want 1", got)
+	}
+
+	rejected := []struct {
+		name  string
+		epoch int64
+	}{
+		{"nanoseconds fed to a seconds cache", 1_700_000_000 * int64(time.Second)},
+		{"just above the range", maxBucketTimestamp + 1},
+		{"the largest epoch", math.MaxInt64},
+		{"just below the range", minBucketTimestamp - 1},
+		{"the smallest epoch", math.MinInt64},
+	}
+	for _, tc := range rejected {
+		if got := c.Store(tc.epoch, "k"); got != lateEvent {
+			t.Fatalf("Store(%s) = %d, want %d", tc.name, got, lateEvent)
+		}
+	}
+
+	if got := c.Store(1_700_000_001, "k"); got != 2 {
+		t.Fatalf("Store after the rejected epochs = %d, want 2 (the high-water mark must not have moved)", got)
+	}
+	if got := c.Get(1_700_000_001, "k"); got != 2 {
+		t.Fatalf("Get at a real epoch = %d, want 2", got)
+	}
+	if got := c.Get(maxBucketTimestamp+1, "k"); got != lateEvent {
+		t.Fatalf("Get above the range = %d, want %d", got, lateEvent)
+	}
+}
+
+// TestOutOfRangeEpochIsCheckedAfterUnitConversion pins that the range applies to
+// the bucket timestamp in seconds, not to the raw epoch: the same integer is
+// usable as milliseconds and out of range as seconds.
+func TestOutOfRangeEpochIsCheckedAfterUnitConversion(t *testing.T) {
+	const millisPerSecond = 1000
+	c := newTestCache(t, Config{Precision: time.Second, WindowSize: 300 * time.Second}) // EpochInMillis.
+
+	if got := c.Store(1_700_000_000*millisPerSecond, "k"); got != 1 {
+		t.Fatalf("Store at a real epoch = %d, want 1", got)
+	}
+	if got := c.Store((maxBucketTimestamp+1)*millisPerSecond, "k"); got != lateEvent {
+		t.Fatalf("Store at a millisecond epoch beyond the range = %d, want %d", got, lateEvent)
+	}
+	if got := c.Store(1_700_000_001*millisPerSecond, "k"); got != 2 {
+		t.Fatalf("Store after the rejected epoch = %d, want 2 (the high-water mark must not have moved)", got)
 	}
 }
