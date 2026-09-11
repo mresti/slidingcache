@@ -24,7 +24,9 @@
 // Events that share a truncated timestamp are counted individually but stored
 // once, as a bucket holding their number, so a key's memory is bounded by
 // WindowSize/Precision buckets regardless of its event rate. A bucket is a
-// single 8-byte word packing the timestamp and the count.
+// single 8-byte word packing the timestamp and the count; how the word splits
+// between the two, and therefore the range of epochs the cache accepts, follows
+// from Config.CountBits.
 //
 // # Out-of-order and late events
 //
@@ -39,8 +41,9 @@
 // The high-water mark only ever moves forward, and it is not clamped, so an
 // epoch in the wrong unit can drag the window forward with it. Store and Get
 // reject outright, with -1 and without touching HW, any epoch whose bucket
-// timestamp falls outside +-2^43 seconds (about +-278,000 years), which is the
-// range a bucket word represents. That absorbs the grossest unit mistake:
+// timestamp falls outside +-2^(63-CountBits) seconds (+-2^43 seconds, about
+// +-278,000 years, with the default CountBits of 20), which is the range a
+// bucket word represents. That absorbs the grossest unit mistake:
 // nanoseconds passed to a cache configured for seconds land near 1.7e18
 // seconds and are rejected rather than bricking the cache.
 //
@@ -83,15 +86,16 @@ type SlidingCache interface {
 	// (t <= HW - WindowSize after conversion and truncation), it is not stored
 	// and Store returns -1 to signal "late event, not stored". Store also
 	// returns -1, without advancing the high-water mark, for an epoch whose
-	// bucket timestamp falls outside +-2^43 seconds (about +-278,000 years).
+	// bucket timestamp falls outside the range a bucket word represents:
+	// +-2^(63-CountBits) seconds, +-2^43 seconds with the default CountBits.
 	Store(epoch int64, keyInHash string) int
 	// Get returns the live count for keyInHash within the sliding window
 	// covering epoch. Returns 0 if the key does not exist.
 	//
 	// If epoch itself falls outside the live window (t <= HW - WindowSize after
-	// conversion and truncation), or its bucket timestamp falls outside +-2^43
-	// seconds, Get returns -1 to signal "queried epoch is outside the live
-	// window".
+	// conversion and truncation), or its bucket timestamp falls outside
+	// +-2^(63-CountBits) seconds, Get returns -1 to signal "queried epoch is
+	// outside the live window".
 	Get(epoch int64, keyInHash string) int
 }
 
@@ -144,6 +148,39 @@ type Config struct {
 	// events and compacts shards. It may be sub-second (useful in tests). When
 	// zero, it defaults to WindowSize.
 	SweepInterval time.Duration
+	// CountBits is the width, in bits, of the per-event count packed into a
+	// bucket word; the remaining 63-CountBits bits hold the bucket timestamp in
+	// seconds. Zero selects the default of 20. Any other value must be between 8
+	// and 24.
+	//
+	// The choice trades events per bucket against the range of epochs the cache
+	// accepts:
+	//
+	//	CountBits | events per bucket before spill | timestamp bits | Unix-seconds epochs usable until
+	//	----------+-------------------------------+----------------+---------------------------------
+	//	8         | 255                           | 55             | year ~1.1e9
+	//	12        | 4,095                         | 51             | year ~7.1e7
+	//	16        | 65,535                        | 47             | year ~4.5e6
+	//	20 (dflt) | 1,048,575                     | 43             | year 280,707
+	//	24        | 16,777,215                    | 39             | year 19,391
+	//
+	// The range is expressed in seconds of bucket timestamp whatever the
+	// EpochUnit, and it is symmetric around the epoch: a cache accepts bucket
+	// timestamps within +-2^(63-CountBits) seconds. An epoch outside it makes
+	// Store and Get return -1 without advancing the high-water mark, the same
+	// rejection an unrepresentable timestamp has always received.
+	//
+	// The upper bound of 24 keeps at least 39 timestamp bits, so every epoch that
+	// an int64 of nanoseconds can express (up to 2262-04-11) still fits with room
+	// to spare. It is where the line is drawn because past it the timestamp range
+	// erodes toward dates real deployments reach: 32 count bits would stop at
+	// 2038-01-19. Below the default, the timestamp range gained is one nobody
+	// needs while the spills bought are real: a bucket that outgrows its count
+	// continues into further words with the same timestamp, which is correct but
+	// costs memory. A key taking 20,000 events per bucket needs 79 words per
+	// bucket at CountBits=8, about 185 KB over a 300-bucket window, against 2.3 KB
+	// at 16 or 20.
+	CountBits int
 }
 
 func (c Config) validate() error {
@@ -162,6 +199,12 @@ func (c Config) validate() error {
 	if c.Shards < 0 || c.Shards > maxShards {
 		return fmt.Errorf("slidingcache: Shards must be between 0 and %d, got %d", maxShards, c.Shards)
 	}
+	if c.CountBits != 0 && (c.CountBits < minCountBits || c.CountBits > maxCountBits) {
+		return fmt.Errorf(
+			"slidingcache: CountBits must be 0 (default %d) or between %d and %d, got %d",
+			defaultCountBits, minCountBits, maxCountBits, c.CountBits,
+		)
+	}
 	if c.SweepInterval < 0 {
 		return fmt.Errorf("slidingcache: SweepInterval must be >= 0, got %s", c.SweepInterval)
 	}
@@ -179,6 +222,13 @@ func validateWholeSeconds(name string, d time.Duration) error {
 		return fmt.Errorf("slidingcache: %s must be a whole multiple of 1s, got %s", name, d)
 	}
 	return nil
+}
+
+func (c Config) countBits() int {
+	if c.CountBits == 0 {
+		return defaultCountBits
+	}
+	return c.CountBits
 }
 
 func (c Config) shardCount() int {
@@ -206,6 +256,10 @@ type Cache struct {
 	bucketDiv int64
 	unit      EpochUnit
 
+	// layout is the bucket word layout chosen by Config.CountBits. Store and Get
+	// use it to reject unrepresentable timestamps; the shards hold their own copy
+	// for the packing itself.
+	layout    bucketLayout
 	shards    []*shard
 	shardMask uint64
 
@@ -252,12 +306,14 @@ func New(cfg Config, opts ...Option) (*Cache, error) {
 		return nil, err
 	}
 	shardCount := roundUpPow2(cfg.shardCount())
+	layout := newBucketLayout(cfg.countBits())
 	c := &Cache{
 		precision:  int64(cfg.Precision / time.Second),
 		windowSize: int64(cfg.WindowSize / time.Second),
 		bucketDiv:  bucketDivisor(cfg.Precision, cfg.EpochUnit),
 		unit:       cfg.EpochUnit,
-		shards:     newShards(shardCount),
+		layout:     layout,
+		shards:     newShards(shardCount, layout),
 		shardMask:  shardMaskOf(shardCount),
 		sweepEvery: cfg.sweepInterval(),
 		done:       make(chan struct{}),
@@ -283,14 +339,6 @@ func applyOptions(c *Cache, opts []Option) error {
 // window (t <= HW - WindowSize).
 const lateEvent = -1
 
-// inBucketRange reports whether a bucket timestamp fits in the high bits of a
-// bucket word. Timestamps outside the range are rejected at the API boundary:
-// packing one would overflow into the sign bit, and letting it through would
-// also move the high-water mark to a value no real event can reach.
-func inBucketRange(timestamp int64) bool {
-	return timestamp >= minBucketTimestamp && timestamp <= maxBucketTimestamp
-}
-
 // noObservedHighWater is the high-water mark of a Cache on which Store has never
 // been called. It is the smallest mark whose cutoff is representable, so a fresh
 // cache treats every usable timestamp as alive while keeping the invariant that
@@ -304,12 +352,15 @@ func noObservedHighWater(windowSize int64) int64 {
 // expired relative to the current high-water mark is not stored; Store then
 // returns -1 to signal "late event, not stored".
 //
-// An epoch whose bucket timestamp is not representable (beyond about +-278,000
-// years from the epoch) is rejected the same way, before the high-water mark is
-// consulted, so it cannot drag the window with it.
+// An epoch whose bucket timestamp is not representable (beyond
+// +-2^(63-CountBits) seconds from the epoch, about +-278,000 years with the
+// default CountBits) is rejected the same way, before the high-water mark is
+// consulted, so it cannot drag the window with it: packing such a timestamp
+// would overflow into the sign bit, and letting it through would move the
+// high-water mark to a value no real event can reach.
 func (c *Cache) Store(epoch int64, keyInHash string) int {
 	timestamp := c.bucket(epoch)
-	if !inBucketRange(timestamp) {
+	if !c.layout.inRange(timestamp) {
 		return lateEvent
 	}
 	if timestamp <= cutoffFor(c.advanceHighWater(timestamp), c.windowSize) {
@@ -326,7 +377,7 @@ func (c *Cache) Store(epoch int64, keyInHash string) int {
 // Get returns -1. Get reads the current high-water mark but does not advance it.
 func (c *Cache) Get(epoch int64, keyInHash string) int {
 	timestamp := c.bucket(epoch)
-	if !inBucketRange(timestamp) {
+	if !c.layout.inRange(timestamp) {
 		return lateEvent
 	}
 	cutoff := c.cutoff()

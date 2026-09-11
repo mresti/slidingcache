@@ -10,15 +10,18 @@ import (
 // to shards by a hash of the key, so operations on different shards proceed
 // concurrently.
 type shard struct {
-	mu   sync.Mutex
-	keys map[string]*entry
-	peak int // largest observed len(keys) since the last map compaction.
+	// layout is a copy of the Cache's bucket layout, held here so the hot path
+	// reads it from the shard it has already loaded.
+	layout bucketLayout
+	mu     sync.Mutex
+	keys   map[string]*entry
+	peak   int // largest observed len(keys) since the last map compaction.
 }
 
-func newShards(count int) []*shard {
+func newShards(count int, layout bucketLayout) []*shard {
 	shards := make([]*shard, count)
 	for i := range shards {
-		shards[i] = &shard{keys: make(map[string]*entry)}
+		shards[i] = &shard{layout: layout, keys: make(map[string]*entry)}
 	}
 	return shards
 }
@@ -43,18 +46,18 @@ func (s *shard) store(key string, timestamp int64, highWater *atomic.Int64, wind
 
 	e, ok := s.keys[key]
 	if !ok {
-		s.keys[key] = newEntry(timestamp)
+		s.keys[key] = newEntry(s.layout, timestamp)
 		s.trackPeak()
 		return 1
 	}
 
-	e.prune(cutoff)
+	e.prune(s.layout, cutoff)
 	// Spelled out instead of e.insert so that the in-order path inlines here;
 	// see entry.insert for why the combined function does not.
-	if e.inOrder(timestamp) {
-		e.recordInOrder(timestamp)
+	if e.inOrder(s.layout, timestamp) {
+		e.recordInOrder(s.layout, timestamp)
 	} else {
-		e.recordOutOfOrder(timestamp)
+		e.recordOutOfOrder(s.layout, timestamp)
 	}
 	return e.total
 }
@@ -70,7 +73,7 @@ func (s *shard) count(key string, cutoff int64) int {
 	if !ok {
 		return 0
 	}
-	return e.liveCount(cutoff)
+	return e.liveCount(s.layout, cutoff)
 }
 
 // sweep prunes every key in the shard, deletes the keys left without a single
@@ -81,7 +84,7 @@ func (s *shard) sweep(cutoff int64) {
 	defer s.mu.Unlock()
 
 	for key, e := range s.keys {
-		e.prune(cutoff)
+		e.prune(s.layout, cutoff)
 		if e.total == 0 {
 			delete(s.keys, key)
 		}
