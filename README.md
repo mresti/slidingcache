@@ -269,6 +269,40 @@ changing the key-to-shard mapping after events are stored would misroute later
 `Store`/`Get` calls to the wrong shard. Passing a `nil` function makes `New`
 return an error. Omitting the option keeps the default FNV-1a.
 
+## Future-skew guard (`guard` package)
+
+The cache tracks one global high-water mark: a single event with a future
+timestamp drags it forward for **every** key, silently discarding real-time
+ingest with `-1` until wall time catches up (2h30m for a +3h jump; see
+[`bench/RESULTS.md`](bench/RESULTS.md)). The `guard` subpackage rejects those
+events before the cache sees them:
+
+```go
+import "github.com/mresti/slidingcache/guard"
+
+c, err := slidingcache.New(slidingcache.Config{ /* ... */ })
+g, err := guard.New(c, guard.Config{
+    Enabled:       true, // opt-in; disabled returns the cache unchanged
+    // MaxFutureSkew/MaxPastSkew default to guard.DefaultMaxSkew (120s) each.
+})
+
+g.Store(epoch, key) // -2 when epoch > now+MaxFutureSkew (discarded, cache untouched)
+                    // -1 when epoch < now-MaxPastSkew  (discarded)
+                    // otherwise delegates to the cache unchanged
+```
+
+| Return | Meaning |
+|--------|---------|
+| `>= 0` | delegated result from the cache |
+| `-1` (`guard.LateRejected`) | epoch behind the guard's clock by more than `MaxPastSkew`; stricter than the cache's own window |
+| `-2` (`guard.FutureRejected`) | epoch ahead of the guard's clock by more than `MaxFutureSkew`; the event never reaches the cache, so it cannot poison the high-water mark |
+
+The guard adds one clock read and two integer comparisons per call (~0 ns with
+a pinned clock, ~33 ns with the default `time.Now()`; measured in
+`bench/RESULTS.md`). `Config.Now` supplies the clock in tests; `Config.EpochUnit`
+must match the cache's (nil selects `EpochInNanos`, matching the default clock).
+The guard does not own the cache: close it yourself.
+
 ## Memory management
 
 Go maps and slices never shrink their backing storage on their own, so a naive
