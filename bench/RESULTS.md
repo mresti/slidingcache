@@ -49,3 +49,23 @@ and drags the **global** high-water mark forward for every key:
 `StoreLateReject`'s 2-3 ns/op is the sound of that outage: cheap, silent, and
 total. Mitigation tracked as the ingest-side skew guard (`guard` package) and
 v1.3.0 observability (`HighWater()`, `Stats()`).
+
+## PR-1: ingest skew guard (rev d360176, 2026-09-12)
+
+The `guard` package rejects out-of-skew epochs before the cache sees them:
+`epoch > now+MaxFutureSkew` → `-2`, `epoch < now-MaxPastSkew` → `-1`, both
+opt-in via `Config.Enabled` (disabled = the cache itself, zero overhead).
+Raw: `bench/2026-09-12-d360176.txt` (workload rows statistically unchanged vs
+the v1.2.0 baseline; the guard is a separate package and never touches the
+library hot path).
+
+| Benchmark | Result | Meaning |
+|---|---|---|
+| `RawCacheStoreRealClock` | 48.7 ns/op | raw cache + one `time.Now()` per call, no guard |
+| `GuardStoreRealClock` | 81.8 ns/op | guard adds its own clock read + 2 integer comparisons (~33 ns) |
+| `GuardStoreFakeClock` | 21.1 ns/op | pinned clock: guard overhead ~0 vs the raw 19.7-25 ns same-bucket path |
+| `GuardGetFakeClock` | 17.7 ns/op | read path, same shape |
+
+The ~33 ns per call is the guard's own `time.Now()`; the two skew comparisons
+are noise-level. Against the 2.5h full-ingest blackout of an unguarded +3h
+jump, that is the trade the guard exists to buy.

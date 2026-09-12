@@ -73,7 +73,8 @@ bench-save: ## Records the workload benchmarks into bench/<date>-<rev>.txt for b
 	@mkdir -p bench
 	@stamp=bench/$$(date +%Y-%m-%d)-$$(git rev-parse --short HEAD).txt; \
 	{ go test -run '^$$' -bench '^$(BENCH_WORKLOAD)(HotKey50KPerSec|FutureJumpRejectStorm|100KKeysParallel)$$' -benchmem -count=10 -cpu=1,8 $(BENCHFLAGS); \
-	  go test -run '^$$' -bench '^$(BENCH_WORKLOAD)(100KKeysFullWindow|Footprint)$$' -benchtime=1x -benchmem -count=10 -cpu=1 $(BENCHFLAGS); } | tee $$stamp; \
+	  go test -run '^$$' -bench '^$(BENCH_WORKLOAD)(100KKeysFullWindow|Footprint)$$' -benchtime=1x -benchmem -count=10 -cpu=1 $(BENCHFLAGS); \
+	  go test -run '^$$' -bench '^Benchmark(RawCache|Guard)' -benchmem -count=10 -cpu=1 $(BENCHFLAGS) ./guard; } | tee $$stamp; \
 	echo "saved $$stamp"
 
 .PHONY: test-fuzz
