@@ -245,6 +245,23 @@ func (c Config) sweepInterval() time.Duration {
 	return c.SweepInterval
 }
 
+// Stats is a point-in-time snapshot of the Cache's operation counters. Values
+// are counts since New; the struct is a value copy, immune to later activity.
+//
+// The counters partition the outcomes of Store, and the rejections of Get:
+//
+//	StoresAccepted + StoresLate + StoresOutOfRange == stores
+//	StoresLate covers both the pre-lock fast reject and the rare under-lock
+//	rejection when a concurrent Store advances the high-water mark first.
+//	GetsLate covers every -1 from Get: an out-of-window query or an
+//	unrepresentable epoch.
+type Stats struct {
+	StoresAccepted   int64
+	StoresLate       int64
+	StoresOutOfRange int64
+	GetsLate         int64
+}
+
 // Cache is a sharded, concurrency-safe sliding-window event counter. It
 // implements SlidingCache and additionally exposes Close to stop its background
 // janitor. A Cache must be created with New and released with Close.
@@ -264,6 +281,12 @@ type Cache struct {
 	shardMask uint64
 
 	highWater atomic.Int64
+
+	// Operation counters, updated with one atomic add per call; see Stats.
+	storesAccepted   atomic.Int64
+	storesLate       atomic.Int64
+	storesOutOfRange atomic.Int64
+	getsLate         atomic.Int64
 
 	hash HashFunc
 
@@ -361,14 +384,22 @@ func noObservedHighWater(windowSize int64) int64 {
 func (c *Cache) Store(epoch int64, keyInHash string) int {
 	timestamp := c.bucket(epoch)
 	if !c.layout.inRange(timestamp) {
+		c.storesOutOfRange.Add(1)
 		return lateEvent
 	}
 	if timestamp <= cutoffFor(c.advanceHighWater(timestamp), c.windowSize) {
+		c.storesLate.Add(1)
 		return lateEvent
 	}
 	// The pre-lock check above is only a fast reject; the shard re-derives the
 	// cutoff under its lock, where it cannot be stale.
-	return c.shardFor(keyInHash).store(keyInHash, timestamp, &c.highWater, c.windowSize)
+	res := c.shardFor(keyInHash).store(keyInHash, timestamp, &c.highWater, c.windowSize)
+	if res == lateEvent {
+		c.storesLate.Add(1)
+		return res
+	}
+	c.storesAccepted.Add(1)
+	return res
 }
 
 // Get returns the live count for keyInHash within the sliding window covering
@@ -378,13 +409,43 @@ func (c *Cache) Store(epoch int64, keyInHash string) int {
 func (c *Cache) Get(epoch int64, keyInHash string) int {
 	timestamp := c.bucket(epoch)
 	if !c.layout.inRange(timestamp) {
+		c.getsLate.Add(1)
 		return lateEvent
 	}
 	cutoff := c.cutoff()
 	if timestamp <= cutoff {
+		c.getsLate.Add(1)
 		return lateEvent
 	}
 	return c.shardFor(keyInHash).count(keyInHash, cutoff)
+}
+
+// HighWater returns the current high-water mark: the maximum bucket timestamp,
+// in seconds, that Store has ever observed. An event whose truncated timestamp
+// is not strictly greater than HighWater-WindowSize (the window length in
+// seconds) is late. Before the first Store the mark sits at the smallest value
+// whose cutoff is representable, below every usable epoch.
+//
+// The mark only ever moves forward. A value that leaps far ahead of wall-clock
+// time signals a future timestamp (or an epoch in the wrong unit) poisoning
+// the window for every key; pair it with Stats to alert on that signature.
+// HighWater does not advance the mark.
+func (c *Cache) HighWater() int64 {
+	return c.highWater.Load()
+}
+
+// Stats returns a snapshot of the operation counters. Counters are global and
+// monotonic: they never reset, and the returned struct is a value copy immune
+// to later activity. The atomic adds cost on the order of the existing
+// high-water mark access; measure with the workload benchmarks in
+// bench/RESULTS.md before scaling the counters further (e.g. per shard).
+func (c *Cache) Stats() Stats {
+	return Stats{
+		StoresAccepted:   c.storesAccepted.Load(),
+		StoresLate:       c.storesLate.Load(),
+		StoresOutOfRange: c.storesOutOfRange.Load(),
+		GetsLate:         c.getsLate.Load(),
+	}
 }
 
 // Close stops the background janitor. It is idempotent and safe to call
