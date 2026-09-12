@@ -1,0 +1,138 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/mresti/slidingcache
+cpu: Apple M2
+BenchmarkWorkloadHotKey50KPerSec           	50040786	        24.57 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadHotKey50KPerSec           	57029815	        24.79 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadHotKey50KPerSec           	55919941	        24.61 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadHotKey50KPerSec           	57057609	        24.69 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadHotKey50KPerSec           	58502812	        24.79 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadHotKey50KPerSec           	55249254	        24.61 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadHotKey50KPerSec           	55672720	        24.72 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadHotKey50KPerSec           	55667018	        24.75 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadHotKey50KPerSec           	56238246	        24.70 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadHotKey50KPerSec           	57305336	        24.80 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadHotKey50KPerSec-8         	56401798	        24.71 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadHotKey50KPerSec-8         	57042014	        24.78 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadHotKey50KPerSec-8         	58327105	        25.14 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadHotKey50KPerSec-8         	57289148	        24.79 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadHotKey50KPerSec-8         	54838443	        24.59 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadHotKey50KPerSec-8         	57270351	        24.76 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadHotKey50KPerSec-8         	55093572	        24.71 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadHotKey50KPerSec-8         	55680901	        24.80 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadHotKey50KPerSec-8         	56169476	        24.82 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadHotKey50KPerSec-8         	54352851	        24.68 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkload100KKeysParallel          	17848975	        75.98 ns/op	      23 B/op	       0 allocs/op
+BenchmarkWorkload100KKeysParallel          	23374080	        76.86 ns/op	      17 B/op	       0 allocs/op
+BenchmarkWorkload100KKeysParallel          	23558030	        75.10 ns/op	      17 B/op	       0 allocs/op
+BenchmarkWorkload100KKeysParallel          	23956179	        75.30 ns/op	      17 B/op	       0 allocs/op
+BenchmarkWorkload100KKeysParallel          	24044502	        75.16 ns/op	      17 B/op	       0 allocs/op
+BenchmarkWorkload100KKeysParallel          	24160606	        75.41 ns/op	      17 B/op	       0 allocs/op
+BenchmarkWorkload100KKeysParallel          	23856304	        75.32 ns/op	      17 B/op	       0 allocs/op
+BenchmarkWorkload100KKeysParallel          	24300105	        76.11 ns/op	      17 B/op	       0 allocs/op
+BenchmarkWorkload100KKeysParallel          	23796578	        75.04 ns/op	      17 B/op	       0 allocs/op
+BenchmarkWorkload100KKeysParallel          	24219814	        75.35 ns/op	      17 B/op	       0 allocs/op
+BenchmarkWorkload100KKeysParallel-8        	30665472	        69.80 ns/op	      27 B/op	       0 allocs/op
+BenchmarkWorkload100KKeysParallel-8        	31301829	        66.75 ns/op	      26 B/op	       0 allocs/op
+BenchmarkWorkload100KKeysParallel-8        	30580357	        67.22 ns/op	      27 B/op	       0 allocs/op
+BenchmarkWorkload100KKeysParallel-8        	31606915	        67.33 ns/op	      26 B/op	       0 allocs/op
+BenchmarkWorkload100KKeysParallel-8        	31249965	        67.44 ns/op	      26 B/op	       0 allocs/op
+BenchmarkWorkload100KKeysParallel-8        	31811990	        67.93 ns/op	      26 B/op	       0 allocs/op
+BenchmarkWorkload100KKeysParallel-8        	31384104	        67.55 ns/op	      26 B/op	       0 allocs/op
+BenchmarkWorkload100KKeysParallel-8        	30901387	        68.95 ns/op	      26 B/op	       0 allocs/op
+BenchmarkWorkload100KKeysParallel-8        	31260310	        67.47 ns/op	      26 B/op	       0 allocs/op
+BenchmarkWorkload100KKeysParallel-8        	32020956	        67.54 ns/op	      25 B/op	       0 allocs/op
+BenchmarkWorkloadFutureJumpRejectStorm     	395131268	         3.029 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadFutureJumpRejectStorm     	395871445	         3.030 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadFutureJumpRejectStorm     	396682140	         3.028 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadFutureJumpRejectStorm     	396026588	         3.040 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadFutureJumpRejectStorm     	396304842	         3.032 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadFutureJumpRejectStorm     	395736597	         3.029 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadFutureJumpRejectStorm     	395902464	         3.031 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadFutureJumpRejectStorm     	394466402	         3.030 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadFutureJumpRejectStorm     	397305220	         3.032 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadFutureJumpRejectStorm     	396634008	         3.091 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadFutureJumpRejectStorm-8   	395718871	         3.031 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadFutureJumpRejectStorm-8   	396021033	         3.029 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadFutureJumpRejectStorm-8   	395783205	         3.029 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadFutureJumpRejectStorm-8   	395804690	         3.031 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadFutureJumpRejectStorm-8   	395314263	         3.031 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadFutureJumpRejectStorm-8   	396224802	         3.032 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadFutureJumpRejectStorm-8   	395856156	         3.031 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadFutureJumpRejectStorm-8   	395849354	         3.029 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadFutureJumpRejectStorm-8   	395928752	         3.030 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWorkloadFutureJumpRejectStorm-8   	396358238	         3.028 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/mresti/slidingcache	274.474s
+goos: darwin
+goarch: arm64
+pkg: github.com/mresti/slidingcache
+cpu: Apple M2
+BenchmarkWorkload100KKeysFullWindow 	       1	30215308250 ns/op	6016593320 B/op	 1700547 allocs/op
+BenchmarkWorkload100KKeysFullWindow 	       1	29908678041 ns/op	6016592216 B/op	 1700541 allocs/op
+BenchmarkWorkload100KKeysFullWindow 	       1	29433034333 ns/op	6016592184 B/op	 1700540 allocs/op
+BenchmarkWorkload100KKeysFullWindow 	       1	25180149042 ns/op	6016592184 B/op	 1700540 allocs/op
+BenchmarkWorkload100KKeysFullWindow 	       1	24942936208 ns/op	6016592184 B/op	 1700540 allocs/op
+BenchmarkWorkload100KKeysFullWindow 	       1	28994517375 ns/op	6016592184 B/op	 1700540 allocs/op
+BenchmarkWorkload100KKeysFullWindow 	       1	29637633541 ns/op	6016592184 B/op	 1700540 allocs/op
+BenchmarkWorkload100KKeysFullWindow 	       1	29745469542 ns/op	6016592168 B/op	 1700540 allocs/op
+BenchmarkWorkload100KKeysFullWindow 	       1	29846460875 ns/op	6016592168 B/op	 1700540 allocs/op
+BenchmarkWorkload100KKeysFullWindow 	       1	29238828000 ns/op	6016592184 B/op	 1700540 allocs/op
+BenchmarkWorkloadFootprint          	       1	25066041583 ns/op	      1960 MB-live	     20547 bytes/key	6016592168 B/op	 1700540 allocs/op
+BenchmarkWorkloadFootprint          	       1	24673689000 ns/op	      1960 MB-live	     20547 bytes/key	6016592168 B/op	 1700540 allocs/op
+BenchmarkWorkloadFootprint          	       1	24629076458 ns/op	      1960 MB-live	     20547 bytes/key	6016592184 B/op	 1700540 allocs/op
+BenchmarkWorkloadFootprint          	       1	25006669417 ns/op	      1960 MB-live	     20547 bytes/key	6016592168 B/op	 1700540 allocs/op
+BenchmarkWorkloadFootprint          	       1	29662038958 ns/op	      1960 MB-live	     20547 bytes/key	6016592168 B/op	 1700540 allocs/op
+BenchmarkWorkloadFootprint          	       1	30512284042 ns/op	      1960 MB-live	     20547 bytes/key	6016592168 B/op	 1700540 allocs/op
+BenchmarkWorkloadFootprint          	       1	29354980541 ns/op	      1960 MB-live	     20547 bytes/key	6016592168 B/op	 1700540 allocs/op
+BenchmarkWorkloadFootprint          	       1	29304864167 ns/op	      1960 MB-live	     20547 bytes/key	6016592168 B/op	 1700540 allocs/op
+BenchmarkWorkloadFootprint          	       1	25370479500 ns/op	      1960 MB-live	     20547 bytes/key	6016592184 B/op	 1700540 allocs/op
+BenchmarkWorkloadFootprint          	       1	30164174458 ns/op	      1960 MB-live	     20547 bytes/key	6016592184 B/op	 1700540 allocs/op
+PASS
+ok  	github.com/mresti/slidingcache	561.513s
+goos: darwin
+goarch: arm64
+pkg: github.com/mresti/slidingcache/guard
+cpu: Apple M2
+BenchmarkRawCacheStoreRealClock 	24612958	        48.43 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRawCacheStoreRealClock 	24899019	        48.63 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRawCacheStoreRealClock 	24810004	        48.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRawCacheStoreRealClock 	24565812	        48.65 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRawCacheStoreRealClock 	24640951	        48.76 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRawCacheStoreRealClock 	24665432	        48.65 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRawCacheStoreRealClock 	24419713	        48.72 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRawCacheStoreRealClock 	24601737	        48.66 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRawCacheStoreRealClock 	24475310	        48.75 ns/op	       0 B/op	       0 allocs/op
+BenchmarkRawCacheStoreRealClock 	24488941	        48.71 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardStoreRealClock    	14649644	        81.69 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardStoreRealClock    	14668917	        81.77 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardStoreRealClock    	14681734	        81.66 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardStoreRealClock    	14624462	        81.76 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardStoreRealClock    	14635982	        81.67 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardStoreRealClock    	14628370	        83.05 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardStoreRealClock    	14638497	        81.94 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardStoreRealClock    	14619704	        81.81 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardStoreRealClock    	14655474	        81.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardStoreRealClock    	14694506	        81.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardStoreFakeClock    	64468324	        21.12 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardStoreFakeClock    	63294753	        21.13 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardStoreFakeClock    	64465585	        21.16 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardStoreFakeClock    	64552278	        21.13 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardStoreFakeClock    	64384012	        21.13 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardStoreFakeClock    	64275097	        21.14 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardStoreFakeClock    	63264584	        21.13 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardStoreFakeClock    	63981231	        21.16 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardStoreFakeClock    	64327496	        21.13 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardStoreFakeClock    	64480306	        21.21 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardGetFakeClock      	68204743	        17.66 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardGetFakeClock      	67783524	        17.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardGetFakeClock      	67968932	        17.71 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardGetFakeClock      	68104588	        17.75 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardGetFakeClock      	68209593	        17.70 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardGetFakeClock      	68158740	        17.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardGetFakeClock      	67944398	        17.70 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardGetFakeClock      	67969732	        17.73 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardGetFakeClock      	68573877	        17.70 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGuardGetFakeClock      	68020785	        17.74 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/mresti/slidingcache/guard	52.425s

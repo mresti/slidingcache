@@ -49,3 +49,31 @@ and drags the **global** high-water mark forward for every key:
 `StoreLateReject`'s 2-3 ns/op is the sound of that outage: cheap, silent, and
 total. Mitigation tracked as the ingest-side skew guard (`guard` package) and
 v1.3.0 observability (`HighWater()`, `Stats()`).
+
+## PR-2: HighWater + Stats counters (rev db1952f, 2026-09-12)
+
+Adds `Cache.HighWater()` and four global atomic counters (`Cache.Stats()`), one
+atomic add per call. Raw: `bench/2026-09-12-db1952f.txt`, paired with the
+PR-1 record `bench/2026-09-12-d360176.txt` (same library hot paths before the
+counters).
+
+| Benchmark | PR-1 | PR-2 | Delta |
+|---|---|---|---|
+| `WorkloadHotKey50KPerSec` | 24.71 ns/op | 24.55 ns/op | ~ |
+| `Workload100KKeysParallel` (cpu=1) | 75.34 ns/op | 76.89 ns/op | +2.1% |
+| `Workload100KKeysParallel` (cpu=8) | 67.51 ns/op | 80.55 ns/op | **+19.3%** |
+| `WorkloadFutureJumpRejectStorm` | 3.03 ns/op | 3.95 ns/op | +30% (+0.9 ns absolute) |
+| `Workload100KKeysFullWindow` | 29.54 s | 26.01 s | ~ |
+| `WorkloadFootprint` | 27.34 s | 26.11 s | ~ |
+
+Serial hot paths are unchanged; the counters add one shared cache line
+written on every call, and with 8 concurrent writers that line ping-pongs:
++19.3% on the parallel workload, the only case past the 2-3% budget. The
+absolute cost at the sizing workload's required rate (100k ev/s worst case)
+is negligible.
+
+**Proposed follow-up (not implemented):** move the four counters onto the
+shards (each shard owns its counters, `Stats()` sums 16 shards' worth) so
+writers contend only with the shard lock they already share; or accept the
+global counters given the absolute cost. Decide when a read-heavy, many-writer
+deployment actually feels it.

@@ -269,6 +269,27 @@ changing the key-to-shard mapping after events are stored would misroute later
 `Store`/`Get` calls to the wrong shard. Passing a `nil` function makes `New`
 return an error. Omitting the option keeps the default FNV-1a.
 
+## Observability
+
+`Cache.HighWater()` and `Cache.Stats()` expose the cache's internal state
+without touching it:
+
+```go
+hw := cache.HighWater() // max bucket timestamp (seconds) Store has ever seen
+s := cache.Stats()      // StoresAccepted, StoresLate, StoresOutOfRange, GetsLate
+```
+
+- `HighWater` is the global expiry anchor: an event is alive while its
+  truncated timestamp is `> HighWater - WindowSize`. It only ever moves
+  forward, so a value that leaps far ahead of wall-clock time is the signature
+  of a future timestamp (or an epoch in the wrong unit) poisoning the window
+  for every key.
+- The `Stats` counters partition `Store`'s outcomes and `Get`'s rejections.
+  The poisoned-high-water alert pairs both: `HighWater` jumping while
+  `StoresLate` (or `GetsLate`) spikes toward every call. The counters are
+  global and monotonic, cost one atomic add per call, and `Stats()` returns an
+  isolated snapshot.
+
 ## Memory management
 
 Go maps and slices never shrink their backing storage on their own, so a naive
