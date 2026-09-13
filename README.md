@@ -61,19 +61,25 @@ type SlidingCache interface {
 	// Store records an event for keyInHash at the window containing epoch and
 	// returns the resulting live count. Returns -1 if the event is late (its
 	// timestamp is outside the live window) and was not stored, or if its
-	// bucket timestamp is outside ±2^(63−CountBits) seconds.
+	// bucket timestamp is outside ±2^(63−CountBits) seconds; -2 if it lies
+	// further than MaxFutureSkew ahead of Clock().
 	Store(epoch int64, keyInHash string) int
 	// Get returns the live count for keyInHash within the sliding window
 	// covering epoch, or 0 if the key does not exist. Returns -1 if epoch itself
 	// is outside the live window, or its bucket timestamp is outside
-	// ±2^(63−CountBits) seconds.
+	// ±2^(63−CountBits) seconds; -2 if it lies further than MaxFutureSkew ahead
+	// of Clock().
 	Get(epoch int64, keyInHash string) int
 }
 ```
 
-Both methods return the sentinel `-1` when the (converted, truncated) timestamp
-falls outside the live window, or outside the representable epoch range; see
-[Late events and the `-1` sentinel](#late-events-and-the--1-sentinel).
+Both methods return the sentinel `-1` (`slidingcache.LateEvent`) when the
+(converted, truncated) timestamp falls outside the live window, or outside the
+representable epoch range; see
+[Late events and the `-1` sentinel](#late-events-and-the--1-sentinel). On a cache
+configured with `MaxFutureSkew`, both return `-2`
+(`slidingcache.FutureEvent`) for a timestamp too far ahead of the clock; see
+[Future events and the `-2` sentinel](#future-events-and-the--2-sentinel).
 
 `New` returns a `*Cache`, which implements `SlidingCache` and additionally
 exposes `Close() error` to stop the background janitor.
@@ -163,6 +169,92 @@ timestamp, not to the raw argument, so the usable range of `epoch` depends on
 milliseconds, and the whole `int64` in nanoseconds (`±2^43` seconds already
 exceeds it). See [`CountBits` and the epoch range](#countbits-and-the-epoch-range).
 
+### Future events and the `-2` sentinel
+
+`HW` only moves forward and is never clamped, so before v1.3.0 a single event
+dated ahead of real time expired everything behind it. One event three hours in
+the future, on a 30-minute window, pushed `HW` three hours ahead: every real
+event that followed was `-1` until the wall clock caught up, two and a half
+hours later, and the only recovery was to rebuild the cache.
+
+`MaxFutureSkew` closes that hole. With a non-zero skew, an event whose bucket
+timestamp lies further than the skew ahead of `Clock()` is **rejected**: it is
+not stored, `HW` is left where it was, and `Store` returns `-2`
+(`slidingcache.FutureEvent`). `Get` applies the same rule to the epoch it is
+queried with, and never advances `HW` in any case.
+
+```
+reject iff  t > bucket(Clock()) + MaxFutureSkew
+```
+
+The clock reading is truncated to a `Precision` bucket before the comparison, so
+an epoch inside the boundary bucket is still accepted whatever the precision.
+The boundary itself is accepted; the first bucket past it is not.
+
+**The guard is free in steady state.** Only an event beyond the current `HW` can
+advance it, so only such an event is checked, and only such an event calls
+`Clock()`. A continuous in-order stream reads the clock about once per
+`Precision` bucket, not once per `Store`: an event landing in the current bucket,
+an out-of-order arrival, a late event, and every `Get` below the mark pay
+nothing at all. `Store` and `Get` remain allocation-free.
+
+An event ahead of the clock but **inside** the skew is accepted and *does*
+advance `HW`, so the skew also bounds how far a single misdated event can drag
+the window: with `MaxFutureSkew: 5*time.Minute`, five minutes, not three hours.
+Keep it small.
+
+Other properties worth knowing:
+
+- **A clock that steps backwards** (NTP correction) only tightens the guard
+  while it is behind. `HW` never moves back, and events at or below `HW` are
+  never re-checked, so a backward step cannot expire anything.
+- **A clock ahead of the producers** makes the guard inert: everything is
+  accepted, exactly as before v1.3.0.
+- **Non-Unix epochs** need an injected `Clock` on the same time base. A nil
+  `Clock` reads the Unix wall clock in `EpochUnit`; comparing that against
+  epochs on another base would either reject everything or nothing.
+- `MaxFutureSkew: 0` (the default) keeps the pre-v1.3.0 behavior: the misdated
+  event is accepted and drags the window. `Clock` without a skew is rejected by
+  `New` as dead configuration.
+
+#### Caller-side defence
+
+The cache guard is the last line, not the only one. Reject obviously misdated
+events before they reach `Store`, so they are counted as what they are, and
+treat both sentinels explicitly:
+
+```go
+const maxSkew = 5 * time.Minute
+
+if ts > time.Now().Add(maxSkew).UnixNano() {
+    metrics.FutureEvents.Inc()
+    return
+}
+
+switch n := cache.Store(ts, key); n {
+case slidingcache.FutureEvent: // -2: ahead of the clock, not stored.
+    metrics.FutureEvents.Inc()
+case slidingcache.LateEvent: // -1: expired or out of range, not stored.
+    metrics.LateEvents.Inc()
+default:
+    handle(n) // n >= 1: the live count for the key.
+}
+```
+
+Never treat a negative return as a count. The recommended configuration for a
+high-throughput producer:
+
+```go
+cfg := slidingcache.Config{
+    Precision:     time.Second,
+    WindowSize:    30 * time.Minute,
+    EpochUnit:     slidingcache.EpochInNanos,
+    MaxFutureSkew: 5 * time.Minute,
+    Shards:        128,
+    SweepInterval: 2 * time.Minute,
+}
+```
+
 ### `Get` and the high-water mark
 
 `Get` validates the caller's epoch against the current high-water mark but does
@@ -181,6 +273,8 @@ whose high-water mark has advanced past `WindowSize` returns `-1`.
 | `EpochUnit`     | `EpochUnit`     | no       | `EpochInMillis` (0) | Unit of the `epoch` arguments: `EpochInMillis`, `EpochInNanos`, or `EpochInSeconds`. Defaults to milliseconds (`time.Now().UnixMilli()`). |
 | `Shards`        | `int`           | no       | `16`               | Number of internal shards; rounded up to a power of two. Must be between `0` and `1048576` (`1<<20`). See [Choosing `Shards`](#choosing-shards). |
 | `SweepInterval` | `time.Duration` | no       | `WindowSize`       | Period of the background janitor. May be sub-second (useful in tests). Must be `>= 0`. |
+| `MaxFutureSkew` | `time.Duration` | no       | `0` (disabled)     | Furthest a bucket timestamp may lie ahead of `Clock()` before `Store` and `Get` reject it with `-2`. Must be `>= 0` and a whole multiple of `time.Second`. See [Future events and the `-2` sentinel](#future-events-and-the--2-sentinel). |
+| `Clock`         | `func() int64`  | no       | Unix wall clock    | Current epoch in `EpochUnit`. Consulted only when `MaxFutureSkew > 0`, and only by an event that would advance the high-water mark. `nil` means `time.Now().UnixNano()`/`UnixMilli()`/`Unix()` per `EpochUnit`; setting it without `MaxFutureSkew` is an error. |
 | `CountBits`     | `int`           | no       | `20`               | Width of the per-bucket event count inside a bucket word; the other `63−CountBits` bits hold the bucket timestamp in seconds. Must be `0` (the default) or between `8` and `24`. See [`CountBits` and the epoch range](#countbits-and-the-epoch-range). |
 
 `Precision` and `WindowSize` must be positive, whole-second durations: sub-second

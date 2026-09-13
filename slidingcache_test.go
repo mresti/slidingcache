@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -785,10 +786,10 @@ func TestStoreRejectsTimestampExpiredByConcurrentHighWaterAdvance(t *testing.T) 
 	c := newTestCache(t, Config{Precision: time.Second, WindowSize: 60 * time.Second, EpochUnit: EpochInSeconds})
 
 	c.Store(1000, "a") // HW = 1000, cutoff = 940: t=950 is alive here.
-	c.advanceHighWater(2000)
+	c.advanceHighWater(2000, c.highWater.Load())
 
-	if got := c.shardFor("a").store("a", 950, &c.highWater, c.windowSize); got != lateEvent {
-		t.Fatalf("store under an advanced high-water mark = %d, want %d", got, lateEvent)
+	if got := c.shardFor("a").store("a", 950, &c.highWater, c.windowSize); got != LateEvent {
+		t.Fatalf("store under an advanced high-water mark = %d, want %d", got, LateEvent)
 	}
 	if got := c.retainedEvents("a"); got != 1 {
 		t.Fatalf("retained events = %d, want 1 (the late event must not be inserted)", got)
@@ -837,11 +838,11 @@ func TestFirstStoreOnFreshCacheAcceptsNegativeEpoch(t *testing.T) {
 func TestUnobservedHighWaterDoesNotUnderflow(t *testing.T) {
 	c := newTestCache(t, Config{Precision: time.Second, WindowSize: 60 * time.Second, EpochUnit: EpochInSeconds})
 
-	if got := c.Get(math.MinInt64+1, "absent"); got != lateEvent {
-		t.Fatalf("Get below the representable range = %d, want %d", got, lateEvent)
+	if got := c.Get(math.MinInt64+1, "absent"); got != LateEvent {
+		t.Fatalf("Get below the representable range = %d, want %d", got, LateEvent)
 	}
-	if got := c.Store(math.MinInt64+1, "k"); got != lateEvent {
-		t.Fatalf("Store below the representable range = %d, want %d", got, lateEvent)
+	if got := c.Store(math.MinInt64+1, "k"); got != LateEvent {
+		t.Fatalf("Store below the representable range = %d, want %d", got, LateEvent)
 	}
 	c.sweep()
 	if got := c.totalKeys(); got != 0 {
@@ -951,14 +952,14 @@ func (m *windowModel) representable(timestamp int64) bool {
 func (m *windowModel) store(epoch int64, key string) int {
 	timestamp := m.bucket(epoch)
 	if !m.representable(timestamp) {
-		return lateEvent
+		return LateEvent
 	}
 	if !m.observed || timestamp > m.highWater {
 		m.highWater = timestamp
 		m.observed = true
 	}
 	if !m.alive(timestamp) {
-		return lateEvent
+		return LateEvent
 	}
 	m.events[key] = append(m.events[key], timestamp)
 	return m.count(key)
@@ -967,7 +968,7 @@ func (m *windowModel) store(epoch int64, key string) int {
 func (m *windowModel) get(epoch int64, key string) int {
 	timestamp := m.bucket(epoch)
 	if !m.representable(timestamp) || !m.alive(timestamp) {
-		return lateEvent
+		return LateEvent
 	}
 	return m.count(key)
 }
@@ -1637,8 +1638,8 @@ func TestOutOfRangeEpochIsRejectedWithoutAdvancingHighWater(t *testing.T) {
 		{"the smallest epoch", math.MinInt64},
 	}
 	for _, tc := range rejected {
-		if got := c.Store(tc.epoch, "k"); got != lateEvent {
-			t.Fatalf("Store(%s) = %d, want %d", tc.name, got, lateEvent)
+		if got := c.Store(tc.epoch, "k"); got != LateEvent {
+			t.Fatalf("Store(%s) = %d, want %d", tc.name, got, LateEvent)
 		}
 	}
 
@@ -1648,8 +1649,8 @@ func TestOutOfRangeEpochIsRejectedWithoutAdvancingHighWater(t *testing.T) {
 	if got := c.Get(1_700_000_001, "k"); got != 2 {
 		t.Fatalf("Get at a real epoch = %d, want 2", got)
 	}
-	if got := c.Get(testLayout.maxTimestamp+1, "k"); got != lateEvent {
-		t.Fatalf("Get above the range = %d, want %d", got, lateEvent)
+	if got := c.Get(testLayout.maxTimestamp+1, "k"); got != LateEvent {
+		t.Fatalf("Get above the range = %d, want %d", got, LateEvent)
 	}
 }
 
@@ -1663,10 +1664,445 @@ func TestOutOfRangeEpochIsCheckedAfterUnitConversion(t *testing.T) {
 	if got := c.Store(1_700_000_000*millisPerSecond, "k"); got != 1 {
 		t.Fatalf("Store at a real epoch = %d, want 1", got)
 	}
-	if got := c.Store((testLayout.maxTimestamp+1)*millisPerSecond, "k"); got != lateEvent {
-		t.Fatalf("Store at a millisecond epoch beyond the range = %d, want %d", got, lateEvent)
+	if got := c.Store((testLayout.maxTimestamp+1)*millisPerSecond, "k"); got != LateEvent {
+		t.Fatalf("Store at a millisecond epoch beyond the range = %d, want %d", got, LateEvent)
 	}
 	if got := c.Store(1_700_000_001*millisPerSecond, "k"); got != 2 {
 		t.Fatalf("Store after the rejected epoch = %d, want 2 (the high-water mark must not have moved)", got)
+	}
+}
+
+// fakeClock is a deterministic Config.Clock. Tests move it by hand and can
+// assert how often the cache consulted it, which is how the "no clock call per
+// Store in steady state" property is pinned down.
+type fakeClock struct {
+	now   atomic.Int64
+	reads atomic.Int64
+}
+
+func newFakeClock(now int64) *fakeClock {
+	c := &fakeClock{}
+	c.now.Store(now)
+	return c
+}
+
+// read is the func passed as Config.Clock.
+func (f *fakeClock) read() int64 {
+	f.reads.Add(1)
+	return f.now.Load()
+}
+
+// current returns the clock without counting a read, for assertions.
+func (f *fakeClock) current() int64 { return f.now.Load() }
+
+func (f *fakeClock) set(now int64) { f.now.Store(now) }
+
+// futureSkewConfig is the configuration of the incident this guard exists for:
+// nanosecond epochs, a 30-minute window at one-second precision, and a
+// five-minute tolerance for producers whose clocks drift.
+func futureSkewConfig(clock *fakeClock) Config {
+	return Config{
+		Precision:     time.Second,
+		WindowSize:    1800 * time.Second,
+		EpochUnit:     EpochInNanos,
+		MaxFutureSkew: 5 * time.Minute,
+		Clock:         clock.read,
+	}
+}
+
+// TestStoreFutureRejectedDoesNotAdvanceHighWater replays the production
+// incident: one event dated three hours ahead used to drag the high-water mark
+// with it and expire the whole window for the next two and a half hours. It must
+// now be rejected, leave the mark, the counts and the stored events untouched,
+// and let the next real event carry on counting.
+func TestStoreFutureRejectedDoesNotAdvanceHighWater(t *testing.T) {
+	const (
+		second  = int64(time.Second)
+		base    = 1_700_000_000 * second
+		events  = 30
+		spacing = 60 * second
+	)
+	now := base + (events-1)*spacing
+	clock := newFakeClock(now)
+	c := newTestCache(t, futureSkewConfig(clock))
+
+	for i := range events {
+		c.Store(base+int64(i)*spacing, "k")
+	}
+	if got := c.Get(now, "k"); got != events {
+		t.Fatalf("Get after filling the window = %d, want %d", got, events)
+	}
+	highWater := c.highWater.Load()
+	keys := c.totalKeys()
+
+	if got := c.Store(now+3*3600*second, "k"); got != FutureEvent {
+		t.Fatalf("Store three hours ahead = %d, want %d", got, FutureEvent)
+	}
+	if got := c.highWater.Load(); got != highWater {
+		t.Fatalf("high-water mark after a rejected future event = %d, want %d", got, highWater)
+	}
+	if got := c.Get(now, "k"); got != events {
+		t.Fatalf("Get after a rejected future event = %d, want unchanged %d", got, events)
+	}
+	if got := c.retainedEvents("k"); got != events {
+		t.Fatalf("retained events after a rejected future event = %d, want unchanged %d", got, events)
+	}
+	if got := c.totalKeys(); got != keys {
+		t.Fatalf("key count after a rejected future event = %d, want unchanged %d", got, keys)
+	}
+
+	if got := c.Store(now+second, "k"); got != events+1 {
+		t.Fatalf("Store of the next real event = %d, want %d", got, events+1)
+	}
+}
+
+// TestStoreWithinSkewAcceptedAtBoundary pins the boundary down to the bucket:
+// the guard compares the event against the truncated clock reading plus the
+// skew, so an epoch inside the boundary bucket is still accepted whatever the
+// precision.
+func TestStoreWithinSkewAcceptedAtBoundary(t *testing.T) {
+	const (
+		skew    = 5 * time.Minute
+		nowSecs = 1_700_000_003 // deliberately off a 5s bucket boundary.
+	)
+	cases := []time.Duration{time.Second, 5 * time.Second}
+
+	for _, precision := range cases {
+		t.Run(fmt.Sprintf("precision=%s", precision), func(t *testing.T) {
+			clock := newFakeClock(nowSecs)
+			c := newTestCache(t, Config{
+				Precision:     precision,
+				WindowSize:    1800 * time.Second,
+				EpochUnit:     EpochInSeconds,
+				MaxFutureSkew: skew,
+				Clock:         clock.read,
+			})
+			step := int64(precision / time.Second)
+			boundary := c.bucket(nowSecs) + int64(skew/time.Second)
+
+			if got := c.Store(boundary, "k"); got != 1 {
+				t.Fatalf("Store at the skew boundary = %d, want 1", got)
+			}
+			if got := c.highWater.Load(); got != boundary {
+				t.Fatalf("high-water mark = %d, want the boundary %d", got, boundary)
+			}
+			if got := c.Store(boundary+step-1, "k"); got != 2 {
+				t.Fatalf("Store inside the boundary bucket = %d, want 2", got)
+			}
+			if got := c.Store(boundary+step, "k"); got != FutureEvent {
+				t.Fatalf("Store one bucket past the boundary = %d, want %d", got, FutureEvent)
+			}
+			if got := c.highWater.Load(); got != boundary {
+				t.Fatalf("high-water mark after the rejection = %d, want unchanged %d", got, boundary)
+			}
+		})
+	}
+}
+
+func TestGetFutureReturnsFutureEvent(t *testing.T) {
+	const (
+		second = int64(time.Second)
+		now    = 1_700_000_000 * second
+	)
+	clock := newFakeClock(now)
+	c := newTestCache(t, futureSkewConfig(clock))
+	c.Store(now, "k")
+	highWater := c.highWater.Load()
+
+	if got := c.Get(now+3*3600*second, "k"); got != FutureEvent {
+		t.Fatalf("Get three hours ahead = %d, want %d", got, FutureEvent)
+	}
+	if got := c.highWater.Load(); got != highWater {
+		t.Fatalf("high-water mark after a future Get = %d, want unchanged %d", got, highWater)
+	}
+	if got := c.Get(now+60*second, "k"); got != 1 {
+		t.Fatalf("Get inside the skew = %d, want 1", got)
+	}
+}
+
+// TestFutureCheckOnlyWhenAdvancingHighWater is the performance contract of the
+// guard expressed as behavior: the clock is read only by an event that would
+// move the high-water mark, so a steady stream inside the current bucket, an
+// out-of-order arrival, or any Get costs no clock call at all.
+func TestFutureCheckOnlyWhenAdvancingHighWater(t *testing.T) {
+	const (
+		second = int64(time.Second)
+		now    = 1_700_000_000 * second
+	)
+	clock := newFakeClock(now)
+	c := newTestCache(t, futureSkewConfig(clock))
+
+	if got := c.Store(now, "k"); got != 1 {
+		t.Fatalf("first Store = %d, want 1", got)
+	}
+	if got := clock.reads.Load(); got != 1 {
+		t.Fatalf("clock reads after the first Store = %d, want 1", got)
+	}
+
+	for i := range 100 {
+		c.Store(now-int64(i%10)*second, "k")
+		c.Get(now-int64(i%10)*second, "k")
+	}
+	if got := clock.reads.Load(); got != 1 {
+		t.Fatalf("clock reads for operations at or below the mark = %d, want no further read", got)
+	}
+
+	if got := c.Store(now+second, "k"); got < 1 {
+		t.Fatalf("Store one second ahead = %d, want a count", got)
+	}
+	if got := clock.reads.Load(); got != 2 {
+		t.Fatalf("clock reads after advancing the mark = %d, want 2", got)
+	}
+}
+
+// TestMaxFutureSkewZeroKeepsLegacyBehavior locks the documented behavior of a
+// cache without a guard: the misdated event is accepted, drags the window with
+// it, and starves every real event that follows. It is the regression this
+// feature is opt-in against.
+func TestMaxFutureSkewZeroKeepsLegacyBehavior(t *testing.T) {
+	const now = 1_700_000_000
+	c := newTestCache(t, Config{
+		Precision:  time.Second,
+		WindowSize: 1800 * time.Second,
+		EpochUnit:  EpochInSeconds,
+	})
+
+	if got := c.Store(now, "k"); got != 1 {
+		t.Fatalf("first Store = %d, want 1", got)
+	}
+	future := int64(now) + 3*3600
+	if got := c.Store(future, "misdated"); got != 1 {
+		t.Fatalf("Store three hours ahead without a guard = %d, want 1 (accepted)", got)
+	}
+	if got := c.highWater.Load(); got != future {
+		t.Fatalf("high-water mark = %d, want it dragged to %d", got, future)
+	}
+	if got := c.Store(now+1, "k"); got != LateEvent {
+		t.Fatalf("Store of a real event afterwards = %d, want %d", got, LateEvent)
+	}
+	if got := c.Get(now+1, "k"); got != LateEvent {
+		t.Fatalf("Get of a real epoch afterwards = %d, want %d", got, LateEvent)
+	}
+}
+
+func TestConfigValidateFutureSkew(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  Config
+	}{
+		{
+			"negative skew",
+			Config{
+				Precision: time.Second, WindowSize: 60 * time.Second, EpochUnit: EpochInSeconds,
+				MaxFutureSkew: -time.Second,
+			},
+		},
+		{
+			"skew below one second",
+			Config{
+				Precision: time.Second, WindowSize: 60 * time.Second, EpochUnit: EpochInSeconds,
+				MaxFutureSkew: 500 * time.Millisecond,
+			},
+		},
+		{
+			"skew not whole seconds",
+			Config{
+				Precision: time.Second, WindowSize: 60 * time.Second, EpochUnit: EpochInSeconds,
+				MaxFutureSkew: 1500 * time.Millisecond,
+			},
+		},
+		{
+			"clock without skew",
+			Config{
+				Precision: time.Second, WindowSize: 60 * time.Second, EpochUnit: EpochInSeconds,
+				Clock: func() int64 { return 0 },
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := New(tc.cfg); err == nil {
+				t.Fatalf("New(%+v) = nil error, want error", tc.cfg)
+			}
+		})
+	}
+}
+
+// TestDefaultClockMatchesEpochUnit checks that a guard left without a Clock
+// reads the wall clock in the unit the cache was configured with: a reading in
+// the wrong unit would either reject everything or never reject anything.
+func TestDefaultClockMatchesEpochUnit(t *testing.T) {
+	cases := []struct {
+		name      string
+		unit      EpochUnit
+		now       func() int64
+		tolerance int64
+	}{
+		{"nanos", EpochInNanos, func() int64 { return time.Now().UnixNano() }, int64(time.Minute)},
+		{
+			"millis",
+			EpochInMillis,
+			func() int64 { return time.Now().UnixMilli() },
+			int64(time.Minute / time.Millisecond),
+		},
+		{"seconds", EpochInSeconds, func() int64 { return time.Now().Unix() }, int64(time.Minute / time.Second)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestCache(t, Config{
+				Precision:     time.Second,
+				WindowSize:    60 * time.Second,
+				EpochUnit:     tc.unit,
+				MaxFutureSkew: time.Minute,
+			})
+			drift := c.clock() - tc.now()
+			if drift > tc.tolerance || drift < -tc.tolerance {
+				t.Fatalf("default clock is %d units away from time.Now, want within %d", drift, tc.tolerance)
+			}
+		})
+	}
+}
+
+// TestConcurrentFutureAndNormalStores mixes rejected and accepted events across
+// goroutines: rejections must never be visible to the accepted stream, and the
+// high-water mark must never pass the boundary the guard defends.
+func TestConcurrentFutureAndNormalStores(t *testing.T) {
+	const (
+		goroutines   = 8
+		perGoroutine = 500
+		now          = 1_700_000_000
+		skewSeconds  = 300
+	)
+	clock := newFakeClock(now)
+	c := newTestCache(t, Config{
+		Precision:     time.Second,
+		WindowSize:    1800 * time.Second,
+		EpochUnit:     EpochInSeconds,
+		MaxFutureSkew: skewSeconds * time.Second,
+		Shards:        8,
+		Clock:         clock.read,
+	})
+
+	var wg sync.WaitGroup
+	for g := range goroutines {
+		wg.Go(func() {
+			key := fmt.Sprintf("key-%d", g)
+			for i := range perGoroutine {
+				if i%2 == 0 {
+					if got := c.Store(now+3600+int64(i), key); got != FutureEvent {
+						t.Errorf("future Store = %d, want %d", got, FutureEvent)
+					}
+					continue
+				}
+				if got := c.Store(now-int64(i%100), key); got < 1 {
+					t.Errorf("normal Store = %d, want a count", got)
+				}
+			}
+		})
+	}
+	wg.Wait()
+
+	if limit := c.bucket(clock.current()) + skewSeconds; c.highWater.Load() > limit {
+		t.Fatalf("high-water mark = %d, want at most clock+skew %d", c.highWater.Load(), limit)
+	}
+}
+
+const (
+	// fuzzClockBit makes an op move the clock forward instead of touching the
+	// cache; fuzzGetBit makes it a read. The remaining bits carry the offset
+	// from the clock, and its low bits the key.
+	fuzzClockBit = 1 << 7
+	fuzzGetBit   = 1 << 6
+	fuzzOffsets  = 1 << 6
+)
+
+// FuzzFutureSkewInvariants drives arbitrary Store/Get sequences around a clock
+// the fuzzer may only move forward, and asserts the two properties the future
+// guard exists for: the FutureEvent sentinel is returned exactly for timestamps
+// beyond clock+skew, and the high-water mark never passes that boundary,
+// whatever mixture of late, live and future events arrives.
+func FuzzFutureSkewInvariants(f *testing.F) {
+	seeds := []struct {
+		base int64
+		ops  []byte
+	}{
+		{1_700_000_000, []byte{32, 40, 63, 0, 96}},
+		{1_700_000_000, []byte{63, 63, 128 | 16, 63, 96 | 63}},
+		{0, []byte{32, 128 | 1, 33, 128 | 63, 34, 96}},
+		{-1_000_000, []byte{0, 1, 62, 63, 128 | 4, 63, 96}},
+		// A long run of events just past the boundary, which must all be
+		// rejected while the accepted ones keep counting.
+		{1_700_000_000, []byte{36, 36, 63, 63, 36, 96 | 36, 128 | 8, 36, 63}},
+	}
+	for _, seed := range seeds {
+		f.Add(seed.base, seed.ops)
+	}
+
+	f.Fuzz(func(t *testing.T, base int64, ops []byte) {
+		requireFutureGuardInvariants(t, base, ops)
+	})
+}
+
+// requireFutureGuardInvariants replays ops against a guarded cache. The clock is
+// monotonic, so the boundary only ever moves forward and the expectation is
+// exact: a timestamp beyond clock+skew is also beyond the high-water mark, which
+// the guard has kept at or below that same boundary.
+func requireFutureGuardInvariants(t *testing.T, base int64, ops []byte) {
+	t.Helper()
+
+	const (
+		precision   = 10
+		windowSize  = 60
+		skewSeconds = 30
+		maxFuzzOps  = 256
+		// Keeps the base and every offset well inside the representable bucket
+		// range, so this target exercises the guard rather than the range check.
+		baseRange = int64(1) << 40
+	)
+
+	base %= baseRange
+	if len(ops) > maxFuzzOps {
+		ops = ops[:maxFuzzOps]
+	}
+
+	clock := newFakeClock(base)
+	c := newTestCache(t, Config{
+		Precision:     precision * time.Second,
+		WindowSize:    windowSize * time.Second,
+		EpochUnit:     EpochInSeconds,
+		MaxFutureSkew: skewSeconds * time.Second,
+		Clock:         clock.read,
+	})
+
+	for _, op := range ops {
+		if op&fuzzClockBit != 0 {
+			clock.set(clock.current() + int64(op%fuzzOffsets)*precision)
+			continue
+		}
+
+		key := fmt.Sprintf("key-%d", int(op)&fuzzKeyMask)
+		epoch := clock.current() + (int64(op%fuzzOffsets)-fuzzOffsets/2)*precision
+		timestamp := floorDiv(epoch, precision) * precision
+		limit := floorDiv(clock.current(), precision)*precision + skewSeconds
+		highWater := c.highWater.Load()
+
+		var got int
+		if op&fuzzGetBit != 0 {
+			got = c.Get(epoch, key)
+		} else {
+			got = c.Store(epoch, key)
+		}
+
+		if wantFuture := timestamp > limit; wantFuture != (got == FutureEvent) {
+			t.Fatalf("op %d at epoch %d = %d, want FutureEvent: %t (limit %d)", op, epoch, got, wantFuture, limit)
+		}
+		if got == FutureEvent && c.highWater.Load() != highWater {
+			t.Fatalf("high-water mark moved from %d to %d on a rejected event", highWater, c.highWater.Load())
+		}
+		if now := c.highWater.Load(); now > limit {
+			t.Fatalf("high-water mark %d passed clock+skew %d", now, limit)
+		}
 	}
 }
