@@ -212,8 +212,8 @@ func TestCountBitsSpillAcrossLayouts(t *testing.T) {
 				t.Fatalf("words retained after the spilled bucket expired = %d, want 1", got)
 			}
 
-			if got := c.Store(c.layout.maxTimestamp+1, "k"); got != lateEvent {
-				t.Fatalf("Store above the representable range = %d, want %d", got, lateEvent)
+			if got := c.Store(c.layout.maxTimestamp+1, "k"); got != LateEvent {
+				t.Fatalf("Store above the representable range = %d, want %d", got, LateEvent)
 			}
 			if got := c.Store(expired, "k"); got != 2 {
 				t.Fatalf("Store after the rejected epoch = %d, want 2 (the high-water mark must not have moved)", got)

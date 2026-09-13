@@ -61,6 +61,32 @@ test-bench-stat: ## benchstat summary: serial benches at -cpu=1, parallel ones a
 	go run golang.org/x/perf/cmd/benchstat@latest $$parallel; \
 	rm -f $$serial $$parallel
 
+# Benchmark archive: post-change results plus the benchstat comparison against
+# the committed baseline, one pair of files per PR.
+BENCHDIR ?= benchmarks
+BASELINE ?= $(BENCHDIR)/baseline-v1.2.0
+BENCHSTAT ?= go run golang.org/x/perf/cmd/benchstat@latest
+
+.PHONY: test-bench-save
+test-bench-save: ## Saves post benches + benchstat vs baseline: make test-bench-save PR=pr-a-future-skew
+	@test -n "$(PR)" || { echo "usage: make test-bench-save PR=<name>"; exit 1; }
+	@commit="$$(git rev-parse --short HEAD) ($$(git rev-parse --abbrev-ref HEAD))"; \
+	cpu="$$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo unknown)"; \
+	cores="$$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo ?)"; \
+	printf '# go %s | %s | %s cores | commit %s | %s\n' \
+		"$$(go env GOVERSION)" "$$cpu" "$$cores" "$$commit" "$$(date -u +%Y-%m-%dT%H:%MZ)" \
+		> $(BENCHDIR)/$(PR)-serial.txt; \
+	printf '# parallel -cpu=4 | commit %s\n' "$$commit" > $(BENCHDIR)/$(PR)-parallel.txt
+	go test -run '^$$' -bench '^Benchmark(Store|Get|Sweep|Memory)' -benchmem -count=10 -cpu=1 $(BENCHFLAGS) \
+		>> $(BENCHDIR)/$(PR)-serial.txt
+	go test -run '^$$' -bench '^BenchmarkParallel' -benchmem -count=10 -cpu=4 $(BENCHFLAGS) \
+		>> $(BENCHDIR)/$(PR)-parallel.txt
+	$(BENCHSTAT) $(BASELINE)-serial.txt $(BENCHDIR)/$(PR)-serial.txt \
+		> $(BENCHDIR)/$(PR)-vs-baseline-serial.txt
+	$(BENCHSTAT) $(BASELINE)-parallel.txt $(BENCHDIR)/$(PR)-parallel.txt \
+		> $(BENCHDIR)/$(PR)-vs-baseline-parallel.txt
+	@echo "saved $(BENCHDIR)/$(PR)-{serial,parallel}.txt and the benchstat comparisons"
+
 .PHONY: test-fuzz
 test-fuzz: ## Replays Fuzz* seed + saved corpus only (fast, deterministic, safe for CI)
 	go test -run '^Fuzz' -v .
