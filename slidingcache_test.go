@@ -1745,13 +1745,13 @@ func TestHighWaterOnlyMovesForAcceptedStores(t *testing.T) {
 	}
 	assertHighWater(t, "a Get ahead of the mark")
 
-	if got := c.Store(700, "k"); got != lateEvent {
-		t.Fatalf("Store of a late event = %d, want %d", got, lateEvent)
+	if got := c.Store(700, "k"); got != LateEvent {
+		t.Fatalf("Store of a late event = %d, want %d", got, LateEvent)
 	}
 	assertHighWater(t, "a late Store")
 
-	if got := c.Store(testLayout.maxTimestamp+1, "k"); got != lateEvent {
-		t.Fatalf("Store of an out-of-range epoch = %d, want %d", got, lateEvent)
+	if got := c.Store(testLayout.maxTimestamp+1, "k"); got != LateEvent {
+		t.Fatalf("Store of an out-of-range epoch = %d, want %d", got, LateEvent)
 	}
 	assertHighWater(t, "an out-of-range Store")
 }
