@@ -515,6 +515,26 @@ func (c *Cache) Get(epoch int64, keyInHash string) int {
 	return c.shardFor(keyInHash).count(keyInHash, cutoff)
 }
 
+// HighWater reports the high-water mark, in seconds of bucket timestamp, and
+// whether a Store has ever advanced it. Until then the mark is a sentinel below
+// every usable epoch and ok is false; the value returned alongside it is
+// meaningless and must not be used. A Store advances the mark before it is
+// checked against the window, so ok can be true even when that Store was then
+// rejected as late by a concurrent, newer one.
+//
+// The mark is not expressed in Config.EpochUnit. It is always a number of
+// seconds, truncated to Precision, whatever unit Store and Get take; multiply it
+// by the unit to compare it against the epochs the caller feeds in (hw for
+// EpochInSeconds, hw*1e3 for EpochInMillis, hw*1e9 for EpochInNanos).
+//
+// HighWater is a single atomic load and may be called concurrently with Store
+// and Get. It reflects the mark at the instant of that load, which a concurrent
+// Store may already have moved forward.
+func (c *Cache) HighWater() (hw int64, ok bool) {
+	hw = c.highWater.Load()
+	return hw, hw != noObservedHighWater(c.windowSize)
+}
+
 // Close stops the background janitor. It is idempotent and safe to call
 // concurrently. Close always returns nil.
 func (c *Cache) Close() error {

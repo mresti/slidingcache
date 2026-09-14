@@ -24,4 +24,19 @@ Benches nuevos en PR-A (solo aparecen en el fichero post, sin fila en el
 baseline): `StoreFutureReject`, `StoreAdvancingHighWater/skew={off,on}`,
 `StoreSteadyStateWithSkew/keys=*`.
 
+Generar post + comparación:
+```
+make test-bench-save PR=pr-b-highwater
+```
+El target escribe la cabecera (go version, CPU, cores, commit, fecha) y luego los
+dos `go test -bench`; después lanza benchstat contra el baseline.
+Gate: delta <= 3% en StoreManyKeys, StoreHotKeyNanos, GetHitManyKeys, ParallelStore; 0 allocs en Store/Get.
+PR-B no toca el hot path: el post debe ser identico al baseline dentro del ruido.
+Su bench nuevo, `BenchmarkHighWater`, queda fuera de las familias
+`Store|Get|Sweep|Memory` a proposito (como `BenchmarkPruneCopyThreshold`), asi que
+no aparece en estos ficheros; se mide aparte:
+```
+go test -run '^$' -bench '^BenchmarkHighWater$' -benchmem -cpu=1 .
+```
+
 Máquina baseline: Apple M2 (8 cores), go1.27.0, darwin/arm64. Repetir baseline en el host de prod antes de comparar cifras absolutas.

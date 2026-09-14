@@ -1672,6 +1672,119 @@ func TestOutOfRangeEpochIsCheckedAfterUnitConversion(t *testing.T) {
 	}
 }
 
+// TestHighWaterOnFreshCacheReportsNoObservation pins the contract of the ok
+// return: before the first accepted Store there is no mark to report.
+func TestHighWaterOnFreshCacheReportsNoObservation(t *testing.T) {
+	c := newTestCache(t, Config{Precision: time.Second, WindowSize: 300 * time.Second, EpochUnit: EpochInSeconds})
+
+	if _, ok := c.HighWater(); ok {
+		t.Fatalf("HighWater on a fresh cache reported ok = true, want false")
+	}
+
+	c.Store(1000, "k")
+
+	if _, ok := c.HighWater(); !ok {
+		t.Fatalf("HighWater after the first Store reported ok = false, want true")
+	}
+}
+
+// TestHighWaterReportsBucketSecondsWhateverTheUnit pins that the mark is
+// reported in seconds of bucket timestamp, truncated to Precision, for every
+// EpochUnit: the same instant fed in three units yields the same mark.
+func TestHighWaterReportsBucketSecondsWhateverTheUnit(t *testing.T) {
+	const (
+		precision  = 5 * time.Second
+		wantMark   = 1005 // 1007s truncated to the 5-second bucket starting at 1005.
+		nanosEpoch = 1_007_999_999_999
+	)
+
+	cases := []struct {
+		name  string
+		unit  EpochUnit
+		epoch int64
+	}{
+		{"seconds", EpochInSeconds, 1007},
+		{"milliseconds", EpochInMillis, 1_007_999},
+		{"nanoseconds", EpochInNanos, nanosEpoch},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestCache(t, Config{Precision: precision, WindowSize: 300 * time.Second, EpochUnit: tc.unit})
+
+			c.Store(tc.epoch, "k")
+
+			hw, ok := c.HighWater()
+			if !ok {
+				t.Fatalf("HighWater reported ok = false after Store(%d)", tc.epoch)
+			}
+			if hw != wantMark {
+				t.Fatalf("HighWater = %d, want %d (bucket seconds, not %s)", hw, wantMark, tc.name)
+			}
+		})
+	}
+}
+
+// TestHighWaterOnlyMovesForAcceptedStores pins that the mark is a property of
+// the storage path alone: reads never move it, and neither do the two rejections
+// that return -1.
+func TestHighWaterOnlyMovesForAcceptedStores(t *testing.T) {
+	c := newTestCache(t, Config{Precision: time.Second, WindowSize: 300 * time.Second, EpochUnit: EpochInSeconds})
+	c.Store(1000, "k")
+
+	const wantMark = 1000
+	assertHighWater := func(t *testing.T, after string) {
+		t.Helper()
+		hw, ok := c.HighWater()
+		if !ok || hw != wantMark {
+			t.Fatalf("HighWater after %s = (%d, %t), want (%d, true)", after, hw, ok, wantMark)
+		}
+	}
+
+	if got := c.Get(1200, "k"); got != 1 {
+		t.Fatalf("Get ahead of the mark = %d, want 1", got)
+	}
+	assertHighWater(t, "a Get ahead of the mark")
+
+	if got := c.Store(700, "k"); got != lateEvent {
+		t.Fatalf("Store of a late event = %d, want %d", got, lateEvent)
+	}
+	assertHighWater(t, "a late Store")
+
+	if got := c.Store(testLayout.maxTimestamp+1, "k"); got != lateEvent {
+		t.Fatalf("Store of an out-of-range epoch = %d, want %d", got, lateEvent)
+	}
+	assertHighWater(t, "an out-of-range Store")
+}
+
+// TestHighWaterUnderConcurrentStores pins, under -race, that the mark converges
+// on the maximum bucket any writer stored however the goroutines interleave.
+func TestHighWaterUnderConcurrentStores(t *testing.T) {
+	const (
+		writers         = 8
+		storesPerWriter = 500
+		baseEpoch       = 1_700_000_000
+	)
+	c := newTestCache(t, Config{Precision: time.Second, WindowSize: 3600 * time.Second, EpochUnit: EpochInSeconds})
+
+	var wg sync.WaitGroup
+	for w := range writers {
+		wg.Add(1)
+		go func(writer int) {
+			defer wg.Done()
+			for i := range storesPerWriter {
+				c.Store(baseEpoch+int64(writer*storesPerWriter+i), fmt.Sprintf("key-%d", writer))
+			}
+		}(w)
+	}
+	wg.Wait()
+
+	wantMark := int64(baseEpoch + writers*storesPerWriter - 1)
+	hw, ok := c.HighWater()
+	if !ok || hw != wantMark {
+		t.Fatalf("HighWater after concurrent Stores = (%d, %t), want (%d, true)", hw, ok, wantMark)
+	}
+}
+
 // fakeClock is a deterministic Config.Clock. Tests move it by hand and can
 // assert how often the cache consulted it, which is how the "no clock call per
 // Store in steady state" property is pinned down.
