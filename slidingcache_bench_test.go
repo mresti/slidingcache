@@ -434,6 +434,29 @@ func BenchmarkHighWater(b *testing.B) {
 	}
 }
 
+// statsSink keeps the loop below from being optimized away: Stats returns a
+// value that is otherwise unused.
+var statsSink Stats
+
+// BenchmarkStats measures the diagnostics snapshot at the shard count the
+// README recommends for concurrent writers, since its cost is one pass over the
+// shards and grows with them, not with the keys. Its name is deliberately
+// outside the Store/Get/Sweep/Memory families, like BenchmarkHighWater, so it
+// stays out of the throughput comparisons saved by test-bench-save.
+func BenchmarkStats(b *testing.B) {
+	const (
+		shards = 256
+		keys   = 10_000
+	)
+	c := benchCacheShards(b, shards)
+	populate(c, makeKeys(keys))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		statsSink = c.Stats()
+	}
+}
+
 // benchFutureConfig arms the future guard with a clock parked far beyond every
 // epoch the benchmarks use, so the measurements cover the cost of the guard on
 // accepted events rather than its rejection path.

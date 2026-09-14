@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 // testLayout is the bucket layout of a Config that leaves CountBits zero, which
@@ -1782,6 +1783,275 @@ func TestHighWaterUnderConcurrentStores(t *testing.T) {
 	hw, ok := c.HighWater()
 	if !ok || hw != wantMark {
 		t.Fatalf("HighWater after concurrent Stores = (%d, %t), want (%d, true)", hw, ok, wantMark)
+	}
+}
+
+// statsPathCase drives one operation against a prepared cache and pins the
+// counters it moved. The deltas are taken around the operation alone, so the
+// setup's own counting does not leak into the expectation.
+type statsPathCase struct {
+	name       string
+	setup      func(c *Cache)
+	op         func(c *Cache) int
+	wantResult int
+	wantDelta  Stats
+}
+
+// TestStatsCountsEveryPathExactlyOnce walks every outcome Store and Get can
+// have and pins that it moves its own counter and no other.
+func TestStatsCountsEveryPathExactlyOnce(t *testing.T) {
+	const (
+		liveEpoch  = 10_000
+		staleEpoch = 1_000
+	)
+	advanceHighWater := func(c *Cache) { c.Store(liveEpoch, "anchor") }
+
+	cases := []statsPathCase{
+		{
+			name:       "store on a new key",
+			op:         func(c *Cache) int { return c.Store(liveEpoch, "k") },
+			wantResult: 1,
+			wantDelta:  Stats{Accepted: 1},
+		},
+		{
+			name:       "store on an existing key",
+			setup:      func(c *Cache) { c.Store(liveEpoch, "k") },
+			op:         func(c *Cache) int { return c.Store(liveEpoch, "k") },
+			wantResult: 2,
+			wantDelta:  Stats{Accepted: 1},
+		},
+		{
+			name:       "store rejected as late before the lock",
+			setup:      advanceHighWater,
+			op:         func(c *Cache) int { return c.Store(staleEpoch, "k") },
+			wantResult: lateEvent,
+			wantDelta:  Stats{Late: 1},
+		},
+		{
+			// The under-lock reject only happens when a concurrent Store advances
+			// the mark between the pre-lock check and the lock, which no test can
+			// schedule reliably; the shard is driven directly instead, with a mark
+			// already past the timestamp.
+			name:  "store rejected as late under the lock",
+			setup: advanceHighWater,
+			op: func(c *Cache) int {
+				return c.shardFor("k").store("k", staleEpoch, &c.highWater, c.windowSize)
+			},
+			wantResult: lateEvent,
+			wantDelta:  Stats{Late: 1},
+		},
+		{
+			name:       "store of an unrepresentable timestamp",
+			op:         func(c *Cache) int { return c.Store(testLayout.maxTimestamp+1, "k") },
+			wantResult: lateEvent,
+			wantDelta:  Stats{OutOfRange: 1},
+		},
+		{
+			name:       "get on a present key",
+			setup:      func(c *Cache) { c.Store(liveEpoch, "k") },
+			op:         func(c *Cache) int { return c.Get(liveEpoch, "k") },
+			wantResult: 1,
+			wantDelta:  Stats{GetHit: 1},
+		},
+		{
+			name:       "get on an absent key",
+			setup:      func(c *Cache) { c.Store(liveEpoch, "other") },
+			op:         func(c *Cache) int { return c.Get(liveEpoch, "k") },
+			wantResult: 0,
+			wantDelta:  Stats{GetMiss: 1},
+		},
+		{
+			name:       "get on a cache that has never stored",
+			op:         func(c *Cache) int { return c.Get(liveEpoch, "k") },
+			wantResult: 0,
+			wantDelta:  Stats{GetMiss: 1},
+		},
+		{
+			name:       "get outside the live window",
+			setup:      advanceHighWater,
+			op:         func(c *Cache) int { return c.Get(staleEpoch, "k") },
+			wantResult: lateEvent,
+			wantDelta:  Stats{GetLate: 1},
+		},
+		{
+			name:       "get of an unrepresentable timestamp",
+			op:         func(c *Cache) int { return c.Get(testLayout.maxTimestamp+1, "k") },
+			wantResult: lateEvent,
+			wantDelta:  Stats{GetLate: 1},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestCache(
+				t,
+				Config{Precision: time.Second, WindowSize: 300 * time.Second, EpochUnit: EpochInSeconds},
+			)
+			if tc.setup != nil {
+				tc.setup(c)
+			}
+			before := c.Stats()
+
+			if got := tc.op(c); got != tc.wantResult {
+				t.Fatalf("operation returned %d, want %d", got, tc.wantResult)
+			}
+
+			if got := statsDelta(before, c.Stats()); got != tc.wantDelta {
+				t.Fatalf("counters moved by %+v, want %+v", got, tc.wantDelta)
+			}
+		})
+	}
+}
+
+// statsDelta returns the counters gained between two snapshots. Keys is a gauge
+// rather than a counter, so it is left at zero and asserted separately.
+func statsDelta(before, after Stats) Stats {
+	return Stats{
+		Accepted:   after.Accepted - before.Accepted,
+		Late:       after.Late - before.Late,
+		Future:     after.Future - before.Future,
+		OutOfRange: after.OutOfRange - before.OutOfRange,
+		GetHit:     after.GetHit - before.GetHit,
+		GetMiss:    after.GetMiss - before.GetMiss,
+		GetLate:    after.GetLate - before.GetLate,
+		GetFuture:  after.GetFuture - before.GetFuture,
+	}
+}
+
+// TestStatsFutureCountersStayZero pins the placeholders: nothing in this version
+// returns the -2 sentinel, so the two future counters must not move whatever the
+// traffic. The MaxFutureSkew change wires them up.
+func TestStatsFutureCountersStayZero(t *testing.T) {
+	c := newTestCache(t, Config{Precision: time.Second, WindowSize: 300 * time.Second, EpochUnit: EpochInSeconds})
+
+	c.Store(1_000, "k")
+	c.Store(1_000_000_000, "k")
+	c.Store(1, "k")
+	c.Store(testLayout.maxTimestamp+1, "k")
+	c.Get(1_000_000_000, "k")
+	c.Get(1, "k")
+
+	stats := c.Stats()
+	if stats.Future != 0 || stats.GetFuture != 0 {
+		t.Fatalf(
+			"Future = %d, GetFuture = %d, want 0 and 0 until the future guard lands",
+			stats.Future,
+			stats.GetFuture,
+		)
+	}
+}
+
+// TestStatsAccountsForEveryCallUnderConcurrency pins the conservation law under
+// -race: every Store lands in exactly one of the storage counters and every Get
+// in exactly one of the read counters, however the shards interleave.
+func TestStatsAccountsForEveryCallUnderConcurrency(t *testing.T) {
+	const (
+		workers      = 8
+		opsPerWorker = 500
+		baseEpoch    = 1_000_000
+	)
+	c := newTestCache(t, Config{
+		Precision:  time.Second,
+		WindowSize: 60 * time.Second,
+		EpochUnit:  EpochInSeconds,
+		Shards:     16,
+	})
+
+	var wg sync.WaitGroup
+	for w := range workers {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			key := fmt.Sprintf("key-%d", worker)
+			for i := range opsPerWorker {
+				c.Store(mixedEpoch(baseEpoch, worker, i), key)
+				c.Get(mixedEpoch(baseEpoch, worker, i), key)
+			}
+		}(w)
+	}
+	wg.Wait()
+
+	const wantCalls = uint64(workers * opsPerWorker)
+	stats := c.Stats()
+	if stores := stats.Accepted + stats.Late + stats.Future + stats.OutOfRange; stores != wantCalls {
+		t.Fatalf("storage counters sum to %d, want %d Store calls (%+v)", stores, wantCalls, stats)
+	}
+	if gets := stats.GetHit + stats.GetMiss + stats.GetLate + stats.GetFuture; gets != wantCalls {
+		t.Fatalf("read counters sum to %d, want %d Get calls (%+v)", gets, wantCalls, stats)
+	}
+	if stats.Late == 0 || stats.OutOfRange == 0 {
+		t.Fatalf("the mixed workload produced no late or out-of-range rejects: %+v", stats)
+	}
+}
+
+// mixedEpoch spreads a worker's operations over live, long-expired, and
+// unrepresentable timestamps so that a concurrent run exercises every counter.
+func mixedEpoch(baseEpoch int64, worker, i int) int64 {
+	switch i % 4 {
+	case 0:
+		return 0 // far behind the mark once any worker has advanced it.
+	case 1:
+		return testLayout.maxTimestamp + 1
+	default:
+		return baseEpoch + int64(worker*opsPerWorkerStride+i)
+	}
+}
+
+// opsPerWorkerStride keeps the workers' live timestamps apart so they advance
+// the high-water mark past each other's older events.
+const opsPerWorkerStride = 1_000
+
+// TestStatsKeysTracksLiveKeysAndDropsAfterSweep pins Keys as a gauge of what the
+// shards physically hold: it agrees with the shards themselves, and it falls
+// when a sweep removes the keys whose events have all expired.
+func TestStatsKeysTracksLiveKeysAndDropsAfterSweep(t *testing.T) {
+	const keys = 50
+	c := newTestCache(t, Config{Precision: time.Second, WindowSize: 60 * time.Second, EpochUnit: EpochInSeconds})
+
+	for i := range keys {
+		c.Store(1_000, fmt.Sprintf("key-%d", i))
+	}
+
+	if got := c.Stats().Keys; got != keys || got != c.totalKeys() {
+		t.Fatalf("Keys = %d, want %d and the shards' own total of %d", got, keys, c.totalKeys())
+	}
+
+	c.Store(10_000, "survivor") // pushes the mark past the window of every other key.
+	c.sweep()
+
+	if got := c.Stats().Keys; got != 1 || got != c.totalKeys() {
+		t.Fatalf("Keys after the sweep = %d, want 1 and the shards' own total of %d", got, c.totalKeys())
+	}
+}
+
+// TestShardRejectsCannotShareACacheLineWithTheLock pins the layout the counters
+// depend on for their cost: the atomic rejection counters are padded to a whole
+// cache line and placed first, so writing one never invalidates the line holding
+// mu and keys, which every accepted operation touches.
+//
+// The assertion is on the distance between the fields, not on the absolute
+// alignment of the block: Go's allocator does not promise 64-byte-aligned
+// objects, so a shard's base address may sit anywhere on a line and only the
+// separation can be guaranteed.
+func TestShardRejectsCannotShareACacheLineWithTheLock(t *testing.T) {
+	if got := unsafe.Offsetof(shard{}.rejects); got != 0 {
+		t.Fatalf("rejects sits at offset %d, want 0 so the pad separates it from every later field", got)
+	}
+	if got := unsafe.Sizeof(shardRejects{}); got%cacheLineSize != 0 {
+		t.Fatalf("shardRejects is %d bytes, want a whole multiple of the %d-byte cache line", got, cacheLineSize)
+	}
+	for name, offset := range map[string]uintptr{
+		"mu":       unsafe.Offsetof(shard{}.mu),
+		"keys":     unsafe.Offsetof(shard{}.keys),
+		"counters": unsafe.Offsetof(shard{}.counters),
+	} {
+		if offset < cacheLineSize {
+			t.Fatalf(
+				"%s sits at offset %d, within the %d-byte line of the atomic counters",
+				name,
+				offset,
+				cacheLineSize,
+			)
+		}
 	}
 }
 

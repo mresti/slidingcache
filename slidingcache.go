@@ -474,6 +474,7 @@ func noObservedHighWater(windowSize int64) int64 {
 func (c *Cache) Store(epoch int64, keyInHash string) int {
 	timestamp := c.bucket(epoch)
 	if !c.layout.inRange(timestamp) {
+		c.shardFor(keyInHash).rejects.outOfRange.Add(1)
 		return LateEvent
 	}
 	// Only an event beyond the mark can advance it, so the future guard, and
@@ -486,6 +487,7 @@ func (c *Cache) Store(epoch int64, keyInHash string) int {
 		highWater = c.advanceHighWater(timestamp, highWater)
 	}
 	if timestamp <= cutoffFor(highWater, c.windowSize) {
+		c.shardFor(keyInHash).rejects.late.Add(1)
 		return LateEvent
 	}
 	// The pre-lock check above is only a fast reject; the shard re-derives the
@@ -502,6 +504,7 @@ func (c *Cache) Store(epoch int64, keyInHash string) int {
 func (c *Cache) Get(epoch int64, keyInHash string) int {
 	timestamp := c.bucket(epoch)
 	if !c.layout.inRange(timestamp) {
+		c.shardFor(keyInHash).rejects.getLate.Add(1)
 		return LateEvent
 	}
 	highWater := c.highWater.Load()
@@ -510,6 +513,7 @@ func (c *Cache) Get(epoch int64, keyInHash string) int {
 	}
 	cutoff := cutoffFor(highWater, c.windowSize)
 	if timestamp <= cutoff {
+		c.shardFor(keyInHash).rejects.getLate.Add(1)
 		return LateEvent
 	}
 	return c.shardFor(keyInHash).count(keyInHash, cutoff)
@@ -533,6 +537,70 @@ func (c *Cache) Get(epoch int64, keyInHash string) int {
 func (c *Cache) HighWater() (hw int64, ok bool) {
 	hw = c.highWater.Load()
 	return hw, hw != noObservedHighWater(c.windowSize)
+}
+
+// Stats is a point-in-time snapshot of the counters a Cache keeps for every
+// outcome Store and Get can have. Every counter is monotonic for the life of the
+// Cache; there is no reset, so consumers take deltas between two calls to get
+// rates.
+//
+// The snapshot is not atomic across shards: it is read shard by shard, so a
+// burst of concurrent traffic can be counted in the shards visited late and
+// missed in those visited early. The counters are individually exact and the
+// skew is bounded by the duration of the call, which makes the snapshot suitable
+// for metrics and unsuitable as a synchronization point.
+//
+// Accepted + Late + Future + OutOfRange is the number of Store calls that had
+// completed when the snapshot was taken, and GetHit + GetMiss + GetLate +
+// GetFuture the number of Get calls: every call increments exactly one counter.
+type Stats struct {
+	// Accepted counts the Store calls that recorded an event, those that
+	// returned a count of 1 or more.
+	Accepted uint64
+	// Late counts the Store calls rejected as late, with a bucket timestamp at or
+	// below HW - WindowSize. They returned -1 and stored nothing.
+	Late uint64
+	// Future counts the Store calls rejected as too far ahead of the clock. It is
+	// always 0 in this version: the counter is wired up by the MaxFutureSkew
+	// change, which introduces the -2 sentinel it belongs to.
+	Future uint64
+	// OutOfRange counts the Store calls rejected because the bucket timestamp is
+	// not representable, beyond +-2^(63-CountBits) seconds. They returned -1 and
+	// left the high-water mark untouched.
+	OutOfRange uint64
+	// GetHit counts the Get calls that found the key, whatever count they
+	// returned; a key whose events have all expired is still a hit that returns
+	// 0.
+	GetHit uint64
+	// GetMiss counts the Get calls for a key the cache does not hold. They
+	// returned 0.
+	GetMiss uint64
+	// GetLate counts the Get calls that returned -1, whether because the queried
+	// epoch is outside the live window or because its bucket timestamp is not
+	// representable. The key is never looked up, so such a call is neither a hit
+	// nor a miss.
+	GetLate uint64
+	// GetFuture counts the Get calls rejected as too far ahead of the clock.
+	// Like Future, it is always 0 until the MaxFutureSkew change wires it up.
+	GetFuture uint64
+	// Keys is the number of keys the cache currently holds, summed over the
+	// shards. It counts keys with events still physically retained, which
+	// includes keys whose events have all expired but that no Store or sweep has
+	// removed yet.
+	Keys int
+}
+
+// Stats returns a snapshot of the cache's counters. It is safe to call
+// concurrently with Store and Get, and it takes each shard's lock in turn for
+// long enough to read four counters and the key count, which briefly serializes
+// against the operations on that shard. See Stats for what the snapshot does and
+// does not guarantee.
+func (c *Cache) Stats() Stats {
+	var stats Stats
+	for _, s := range c.shards {
+		s.addTo(&stats)
+	}
+	return stats
 }
 
 // Close stops the background janitor. It is idempotent and safe to call
