@@ -1824,7 +1824,7 @@ func TestStatsCountsEveryPathExactlyOnce(t *testing.T) {
 			name:       "store rejected as late before the lock",
 			setup:      advanceHighWater,
 			op:         func(c *Cache) int { return c.Store(staleEpoch, "k") },
-			wantResult: lateEvent,
+			wantResult: LateEvent,
 			wantDelta:  Stats{Late: 1},
 		},
 		{
@@ -1837,13 +1837,13 @@ func TestStatsCountsEveryPathExactlyOnce(t *testing.T) {
 			op: func(c *Cache) int {
 				return c.shardFor("k").store("k", staleEpoch, &c.highWater, c.windowSize)
 			},
-			wantResult: lateEvent,
+			wantResult: LateEvent,
 			wantDelta:  Stats{Late: 1},
 		},
 		{
 			name:       "store of an unrepresentable timestamp",
 			op:         func(c *Cache) int { return c.Store(testLayout.maxTimestamp+1, "k") },
-			wantResult: lateEvent,
+			wantResult: LateEvent,
 			wantDelta:  Stats{OutOfRange: 1},
 		},
 		{
@@ -1870,13 +1870,13 @@ func TestStatsCountsEveryPathExactlyOnce(t *testing.T) {
 			name:       "get outside the live window",
 			setup:      advanceHighWater,
 			op:         func(c *Cache) int { return c.Get(staleEpoch, "k") },
-			wantResult: lateEvent,
+			wantResult: LateEvent,
 			wantDelta:  Stats{GetLate: 1},
 		},
 		{
 			name:       "get of an unrepresentable timestamp",
 			op:         func(c *Cache) int { return c.Get(testLayout.maxTimestamp+1, "k") },
-			wantResult: lateEvent,
+			wantResult: LateEvent,
 			wantDelta:  Stats{GetLate: 1},
 		},
 	}
