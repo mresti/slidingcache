@@ -27,7 +27,7 @@ func newShards(count int, layout bucketLayout) []*shard {
 }
 
 // store records timestamp for key and returns the resulting live count, or
-// lateEvent when timestamp has already expired under the cutoff in force at the
+// LateEvent when timestamp has already expired under the cutoff in force at the
 // moment the shard lock is acquired. The key's expired prefix is pruned before
 // the insert so the entry is grown at most once.
 //
@@ -41,7 +41,7 @@ func (s *shard) store(key string, timestamp int64, highWater *atomic.Int64, wind
 
 	cutoff := cutoffFor(highWater.Load(), windowSize)
 	if timestamp <= cutoff {
-		return lateEvent
+		return LateEvent
 	}
 
 	e, ok := s.keys[key]
