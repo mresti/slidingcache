@@ -10,13 +10,53 @@ import (
 // to shards by a hash of the key, so operations on different shards proceed
 // concurrently.
 type shard struct {
+	// rejects comes first, and is padded to a whole cache line, so the atomic
+	// writes of the rejection paths never invalidate the line holding mu and
+	// keys, which every accepted operation touches.
+	rejects shardRejects
+	// The fields an accepted operation writes are kept adjacent, so the lock, the
+	// counters, and the map header fall on as few cache lines as the allocator
+	// allows: the increments then dirty the line the lock has already taken.
+	mu       sync.Mutex
+	counters shardCounters
+	keys     map[string]*entry
+	peak     int // largest observed len(keys) since the last map compaction.
 	// layout is a copy of the Cache's bucket layout, held here so the hot path
-	// reads it from the shard it has already loaded.
+	// reads it from the shard it has already loaded. It is read-only, so it comes
+	// last, after every field an operation writes.
 	layout bucketLayout
-	mu     sync.Mutex
-	keys   map[string]*entry
-	peak   int // largest observed len(keys) since the last map compaction.
 }
+
+// shardRejects counts the rejections decided before the shard lock is taken, so
+// they are atomic. They are written only on the rare paths: an accepted Store or
+// Get never touches them.
+//
+// The trailing pad rounds the struct to a 64-byte cache line. The Go allocator
+// does not promise 64-byte-aligned objects, so the pad does not put the block on
+// a line of its own; what it does guarantee is that no field after it in shard
+// can share a line with the atomics.
+type shardRejects struct {
+	outOfRange atomic.Uint64
+	late       atomic.Uint64
+	future     atomic.Uint64
+	getLate    atomic.Uint64
+	getFuture  atomic.Uint64
+	_          [cacheLineSize - 5*8]byte
+}
+
+// shardCounters counts the outcomes decided under the shard lock, so plain adds
+// suffice: the lock is already held and the read in Stats takes it too.
+type shardCounters struct {
+	accepted uint64
+	late     uint64
+	getHit   uint64
+	getMiss  uint64
+}
+
+// cacheLineSize is the 64-byte line of every architecture this library targets;
+// on the 128-byte-line arm64 cores it merely under-pads, which costs nothing on
+// a path that is never hot.
+const cacheLineSize = 64
 
 func newShards(count int, layout bucketLayout) []*shard {
 	shards := make([]*shard, count)
@@ -27,7 +67,7 @@ func newShards(count int, layout bucketLayout) []*shard {
 }
 
 // store records timestamp for key and returns the resulting live count, or
-// lateEvent when timestamp has already expired under the cutoff in force at the
+// LateEvent when timestamp has already expired under the cutoff in force at the
 // moment the shard lock is acquired. The key's expired prefix is pruned before
 // the insert so the entry is grown at most once.
 //
@@ -41,8 +81,11 @@ func (s *shard) store(key string, timestamp int64, highWater *atomic.Int64, wind
 
 	cutoff := cutoffFor(highWater.Load(), windowSize)
 	if timestamp <= cutoff {
-		return lateEvent
+		s.counters.late++
+		return LateEvent
 	}
+
+	s.counters.accepted++
 
 	e, ok := s.keys[key]
 	if !ok {
@@ -71,8 +114,10 @@ func (s *shard) count(key string, cutoff int64) int {
 
 	e, ok := s.keys[key]
 	if !ok {
+		s.counters.getMiss++
 		return 0
 	}
+	s.counters.getHit++
 	return e.liveCount(s.layout, cutoff)
 }
 
@@ -117,4 +162,24 @@ func (s *shard) size() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.keys)
+}
+
+// addTo accumulates this shard's counters into stats. The atomics and the
+// lock-guarded fields are read in one pass so a shard is visited once, and
+// len(keys) is read under the lock that already has to be taken.
+func (s *shard) addTo(stats *Stats) {
+	stats.OutOfRange += s.rejects.outOfRange.Load()
+	stats.Late += s.rejects.late.Load()
+	stats.Future += s.rejects.future.Load()
+	stats.GetLate += s.rejects.getLate.Load()
+	stats.GetFuture += s.rejects.getFuture.Load()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	stats.Accepted += s.counters.accepted
+	stats.Late += s.counters.late
+	stats.GetHit += s.counters.getHit
+	stats.GetMiss += s.counters.getMiss
+	stats.Keys += len(s.keys)
 }

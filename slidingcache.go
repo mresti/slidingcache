@@ -36,6 +36,26 @@
 // WindowSize) is rejected: it is not stored, the key's existing events are left
 // untouched, and Store returns -1.
 //
+// # Future events
+//
+// A single event dated far ahead of real time used to be enough to expire
+// everything: it advanced the high-water mark with it, and every real event
+// that followed looked late until the clock caught up. Config.MaxFutureSkew
+// closes that hole. With a non-zero skew, an event whose bucket timestamp lies
+// more than MaxFutureSkew ahead of Config.Clock is rejected with FutureEvent,
+// and the high-water mark is left where it was; Get applies the same rule to
+// the epoch it is queried with, and never advances the mark in any case.
+//
+// The guard is free in steady state: only an event beyond the current mark can
+// advance it, so only such an event consults the clock. A continuous in-order
+// stream reads the clock about once per Precision bucket, not once per Store.
+//
+// An event ahead of the clock but inside the skew is accepted and does advance
+// the mark, so the skew bounds how far one misdated event can drag the window.
+// A clock that steps backwards (NTP) only tightens the guard while it is
+// behind: the high-water mark never moves back. Callers whose epochs are not
+// Unix-based must inject Config.Clock on their own time base.
+//
 // # High-water mark hygiene
 //
 // The high-water mark only ever moves forward, and it is not clamped, so an
@@ -88,6 +108,10 @@ type SlidingCache interface {
 	// returns -1, without advancing the high-water mark, for an epoch whose
 	// bucket timestamp falls outside the range a bucket word represents:
 	// +-2^(63-CountBits) seconds, +-2^43 seconds with the default CountBits.
+	//
+	// On a Cache configured with Config.MaxFutureSkew, an event further than
+	// that skew ahead of Config.Clock is rejected with -2, again without
+	// advancing the high-water mark.
 	Store(epoch int64, keyInHash string) int
 	// Get returns the live count for keyInHash within the sliding window
 	// covering epoch. Returns 0 if the key does not exist.
@@ -95,7 +119,8 @@ type SlidingCache interface {
 	// If epoch itself falls outside the live window (t <= HW - WindowSize after
 	// conversion and truncation), or its bucket timestamp falls outside
 	// +-2^(63-CountBits) seconds, Get returns -1 to signal "queried epoch is
-	// outside the live window".
+	// outside the live window". An epoch further than Config.MaxFutureSkew
+	// ahead of Config.Clock yields -2.
 	Get(epoch int64, keyInHash string) int
 }
 
@@ -148,6 +173,28 @@ type Config struct {
 	// events and compacts shards. It may be sub-second (useful in tests). When
 	// zero, it defaults to WindowSize.
 	SweepInterval time.Duration
+	// MaxFutureSkew is the furthest a bucket timestamp may lie ahead of Clock()
+	// before Store and Get reject it with FutureEvent. Zero disables the check,
+	// which is the behavior of every version before v1.3.0. Must be >= 0 and an
+	// exact multiple of time.Second.
+	//
+	// An event that lies ahead of the clock but inside the skew is accepted and
+	// does advance the high-water mark, so the skew is also the furthest the
+	// window can be dragged forward by a single misdated event. Keep it small: a
+	// few minutes covers clock drift between producers without giving away much
+	// of the window.
+	MaxFutureSkew time.Duration
+	// Clock returns the current epoch in EpochUnit. It is consulted only when
+	// MaxFutureSkew > 0, and only for an event that would advance the high-water
+	// mark, so a steady stream of in-order events calls it about once per
+	// Precision bucket rather than once per Store.
+	//
+	// A nil Clock means the Unix wall clock in EpochUnit
+	// (time.Now().UnixNano(), UnixMilli() or Unix()). Callers whose epochs are
+	// not Unix-based must inject a Clock on the same base, or the guard would
+	// compare two unrelated time lines. Setting Clock without MaxFutureSkew is
+	// rejected by New as dead configuration.
+	Clock func() int64
 	// CountBits is the width, in bits, of the per-event count packed into a
 	// bucket word; the remaining 63-CountBits bits hold the bucket timestamp in
 	// seconds. Zero selects the default of 20. Any other value must be between 8
@@ -208,6 +255,24 @@ func (c Config) validate() error {
 	if c.SweepInterval < 0 {
 		return fmt.Errorf("slidingcache: SweepInterval must be >= 0, got %s", c.SweepInterval)
 	}
+	return c.validateFutureGuard()
+}
+
+// validateFutureGuard rejects a future guard that cannot work: a skew the
+// second-resolution internal clock cannot express, and a Clock that nothing
+// would ever call.
+func (c Config) validateFutureGuard() error {
+	if c.MaxFutureSkew < 0 {
+		return fmt.Errorf("slidingcache: MaxFutureSkew must be >= 0, got %s", c.MaxFutureSkew)
+	}
+	if c.MaxFutureSkew%time.Second != 0 {
+		return fmt.Errorf(
+			"slidingcache: MaxFutureSkew must be a whole multiple of 1s, got %s", c.MaxFutureSkew,
+		)
+	}
+	if c.Clock != nil && c.MaxFutureSkew == 0 {
+		return errors.New("slidingcache: Clock requires MaxFutureSkew > 0; without a skew it is never consulted")
+	}
 	return nil
 }
 
@@ -238,6 +303,32 @@ func (c Config) shardCount() int {
 	return c.Shards
 }
 
+// futureClock returns the clock the future guard consults, or nil when the
+// guard is disabled and no clock would ever be called.
+func (c Config) futureClock() func() int64 {
+	switch {
+	case c.MaxFutureSkew == 0:
+		return nil
+	case c.Clock != nil:
+		return c.Clock
+	default:
+		return unixClock(c.EpochUnit)
+	}
+}
+
+// unixClock returns the wall clock expressed in unit, used when Config.Clock is
+// left nil.
+func unixClock(unit EpochUnit) func() int64 {
+	switch unit {
+	case EpochInNanos:
+		return func() int64 { return time.Now().UnixNano() }
+	case EpochInSeconds:
+		return func() int64 { return time.Now().Unix() }
+	default:
+		return func() int64 { return time.Now().UnixMilli() }
+	}
+}
+
 func (c Config) sweepInterval() time.Duration {
 	if c.SweepInterval <= 0 {
 		return c.WindowSize
@@ -259,6 +350,12 @@ type Cache struct {
 	// layout is the bucket word layout chosen by Config.CountBits. Store and Get
 	// use it to reject unrepresentable timestamps; the shards hold their own copy
 	// for the packing itself.
+	// maxFutureSkew is Config.MaxFutureSkew in seconds, and zero when the future
+	// guard is disabled. clock is nil exactly when maxFutureSkew is zero; the
+	// guard is the only caller and checks the skew first.
+	maxFutureSkew int64
+	clock         func() int64
+
 	layout    bucketLayout
 	shards    []*shard
 	shardMask uint64
@@ -312,6 +409,10 @@ func New(cfg Config, opts ...Option) (*Cache, error) {
 		windowSize: int64(cfg.WindowSize / time.Second),
 		bucketDiv:  bucketDivisor(cfg.Precision, cfg.EpochUnit),
 		unit:       cfg.EpochUnit,
+
+		maxFutureSkew: int64(cfg.MaxFutureSkew / time.Second),
+		clock:         cfg.futureClock(),
+
 		layout:     layout,
 		shards:     newShards(shardCount, layout),
 		shardMask:  shardMaskOf(shardCount),
@@ -335,9 +436,16 @@ func applyOptions(c *Cache, opts []Option) error {
 	return nil
 }
 
-// lateEvent is the sentinel returned when a timestamp falls outside the live
-// window (t <= HW - WindowSize).
-const lateEvent = -1
+// Sentinels returned by Store and Get in place of a count.
+const (
+	// LateEvent is returned when a timestamp falls outside the live window
+	// (t <= HW - WindowSize) or outside the range a bucket word represents.
+	LateEvent = -1
+	// FutureEvent is returned when a timestamp lies further ahead of Clock()
+	// than MaxFutureSkew allows. It is only ever returned by a Cache configured
+	// with a non-zero MaxFutureSkew.
+	FutureEvent = -2
+)
 
 // noObservedHighWater is the high-water mark of a Cache on which Store has never
 // been called. It is the smallest mark whose cutoff is representable, so a fresh
@@ -350,7 +458,12 @@ func noObservedHighWater(windowSize int64) int64 {
 // Store records an event for keyInHash at the window containing epoch and
 // returns the resulting live count for the key. An event that is already
 // expired relative to the current high-water mark is not stored; Store then
-// returns -1 to signal "late event, not stored".
+// returns LateEvent to signal "late event, not stored".
+//
+// When Config.MaxFutureSkew is set, an event whose bucket timestamp lies
+// further than the skew ahead of Config.Clock is not stored either: Store
+// returns FutureEvent and leaves the high-water mark untouched, so a misdated
+// event cannot expire the live window. See the package documentation.
 //
 // An epoch whose bucket timestamp is not representable (beyond
 // +-2^(63-CountBits) seconds from the epoch, about +-278,000 years with the
@@ -361,10 +474,21 @@ func noObservedHighWater(windowSize int64) int64 {
 func (c *Cache) Store(epoch int64, keyInHash string) int {
 	timestamp := c.bucket(epoch)
 	if !c.layout.inRange(timestamp) {
-		return lateEvent
+		c.shardFor(keyInHash).rejects.outOfRange.Add(1)
+		return LateEvent
 	}
-	if timestamp <= cutoffFor(c.advanceHighWater(timestamp), c.windowSize) {
-		return lateEvent
+	// Only an event beyond the mark can advance it, so the future guard, and
+	// with it the clock, stays out of the steady-state path.
+	highWater := c.highWater.Load()
+	if timestamp > highWater {
+		if c.maxFutureSkew > 0 && c.isFuture(timestamp) {
+			return FutureEvent
+		}
+		highWater = c.advanceHighWater(timestamp, highWater)
+	}
+	if timestamp <= cutoffFor(highWater, c.windowSize) {
+		c.shardFor(keyInHash).rejects.late.Add(1)
+		return LateEvent
 	}
 	// The pre-lock check above is only a fast reject; the shard re-derives the
 	// cutoff under its lock, where it cannot be stale.
@@ -374,17 +498,109 @@ func (c *Cache) Store(epoch int64, keyInHash string) int {
 // Get returns the live count for keyInHash within the sliding window covering
 // epoch, or 0 if the key does not exist. If epoch itself falls outside the live
 // window (t <= HW - WindowSize), or its bucket timestamp is not representable,
-// Get returns -1. Get reads the current high-water mark but does not advance it.
+// Get returns LateEvent; if it lies further than Config.MaxFutureSkew ahead of
+// Config.Clock, Get returns FutureEvent. Get reads the current high-water mark
+// but does not advance it.
 func (c *Cache) Get(epoch int64, keyInHash string) int {
 	timestamp := c.bucket(epoch)
 	if !c.layout.inRange(timestamp) {
-		return lateEvent
+		c.shardFor(keyInHash).rejects.getLate.Add(1)
+		return LateEvent
 	}
-	cutoff := c.cutoff()
+	highWater := c.highWater.Load()
+	if timestamp > highWater && c.maxFutureSkew > 0 && c.isFuture(timestamp) {
+		return FutureEvent
+	}
+	cutoff := cutoffFor(highWater, c.windowSize)
 	if timestamp <= cutoff {
-		return lateEvent
+		c.shardFor(keyInHash).rejects.getLate.Add(1)
+		return LateEvent
 	}
 	return c.shardFor(keyInHash).count(keyInHash, cutoff)
+}
+
+// HighWater reports the high-water mark, in seconds of bucket timestamp, and
+// whether a Store has ever advanced it. Until then the mark is a sentinel below
+// every usable epoch and ok is false; the value returned alongside it is
+// meaningless and must not be used. A Store advances the mark before it is
+// checked against the window, so ok can be true even when that Store was then
+// rejected as late by a concurrent, newer one.
+//
+// The mark is not expressed in Config.EpochUnit. It is always a number of
+// seconds, truncated to Precision, whatever unit Store and Get take; multiply it
+// by the unit to compare it against the epochs the caller feeds in (hw for
+// EpochInSeconds, hw*1e3 for EpochInMillis, hw*1e9 for EpochInNanos).
+//
+// HighWater is a single atomic load and may be called concurrently with Store
+// and Get. It reflects the mark at the instant of that load, which a concurrent
+// Store may already have moved forward.
+func (c *Cache) HighWater() (hw int64, ok bool) {
+	hw = c.highWater.Load()
+	return hw, hw != noObservedHighWater(c.windowSize)
+}
+
+// Stats is a point-in-time snapshot of the counters a Cache keeps for every
+// outcome Store and Get can have. Every counter is monotonic for the life of the
+// Cache; there is no reset, so consumers take deltas between two calls to get
+// rates.
+//
+// The snapshot is not atomic across shards: it is read shard by shard, so a
+// burst of concurrent traffic can be counted in the shards visited late and
+// missed in those visited early. The counters are individually exact and the
+// skew is bounded by the duration of the call, which makes the snapshot suitable
+// for metrics and unsuitable as a synchronization point.
+//
+// Accepted + Late + Future + OutOfRange is the number of Store calls that had
+// completed when the snapshot was taken, and GetHit + GetMiss + GetLate +
+// GetFuture the number of Get calls: every call increments exactly one counter.
+type Stats struct {
+	// Accepted counts the Store calls that recorded an event, those that
+	// returned a count of 1 or more.
+	Accepted uint64
+	// Late counts the Store calls rejected as late, with a bucket timestamp at or
+	// below HW - WindowSize. They returned -1 and stored nothing.
+	Late uint64
+	// Future counts the Store calls rejected as too far ahead of the clock. It is
+	// always 0 in this version: the counter is wired up by the MaxFutureSkew
+	// change, which introduces the -2 sentinel it belongs to.
+	Future uint64
+	// OutOfRange counts the Store calls rejected because the bucket timestamp is
+	// not representable, beyond +-2^(63-CountBits) seconds. They returned -1 and
+	// left the high-water mark untouched.
+	OutOfRange uint64
+	// GetHit counts the Get calls that found the key, whatever count they
+	// returned; a key whose events have all expired is still a hit that returns
+	// 0.
+	GetHit uint64
+	// GetMiss counts the Get calls for a key the cache does not hold. They
+	// returned 0.
+	GetMiss uint64
+	// GetLate counts the Get calls that returned -1, whether because the queried
+	// epoch is outside the live window or because its bucket timestamp is not
+	// representable. The key is never looked up, so such a call is neither a hit
+	// nor a miss.
+	GetLate uint64
+	// GetFuture counts the Get calls rejected as too far ahead of the clock.
+	// Like Future, it is always 0 until the MaxFutureSkew change wires it up.
+	GetFuture uint64
+	// Keys is the number of keys the cache currently holds, summed over the
+	// shards. It counts keys with events still physically retained, which
+	// includes keys whose events have all expired but that no Store or sweep has
+	// removed yet.
+	Keys int
+}
+
+// Stats returns a snapshot of the cache's counters. It is safe to call
+// concurrently with Store and Get, and it takes each shard's lock in turn for
+// long enough to read four counters and the key count, which briefly serializes
+// against the operations on that shard. See Stats for what the snapshot does and
+// does not guarantee.
+func (c *Cache) Stats() Stats {
+	var stats Stats
+	for _, s := range c.shards {
+		s.addTo(&stats)
+	}
+	return stats
 }
 
 // Close stops the background janitor. It is idempotent and safe to call
@@ -450,17 +666,32 @@ func cutoffFor(highWater, windowSize int64) int64 {
 	return highWater - windowSize
 }
 
+// isFuture reports whether timestamp lies further ahead of the clock than
+// MaxFutureSkew allows. The clock reading is truncated to a bucket so that the
+// comparison happens in the same units on both sides.
+//
+// Callers must guard the call with maxFutureSkew > 0, which keeps a cache
+// without the feature to a branch rather than a call, and must only reach it
+// for a timestamp beyond the high-water mark: that is what keeps the clock out
+// of the steady-state path, and it also means a clock that steps backwards can
+// only tighten the guard for new marks, never push the high-water mark back.
+func (c *Cache) isFuture(timestamp int64) bool {
+	return timestamp > c.bucket(c.clock())+c.maxFutureSkew
+}
+
 // advanceHighWater raises the global high-water mark to at least timestamp using
-// a compare-and-swap loop and returns the resulting high-water mark.
-func (c *Cache) advanceHighWater(timestamp int64) int64 {
+// a compare-and-swap loop and returns the resulting high-water mark. current is
+// the caller's already-loaded value of the mark, so the hot path loads it once
+// and only a lost race pays for a reload.
+func (c *Cache) advanceHighWater(timestamp, current int64) int64 {
 	for {
-		current := c.highWater.Load()
 		if timestamp <= current {
 			return current
 		}
 		if c.highWater.CompareAndSwap(current, timestamp) {
 			return timestamp
 		}
+		current = c.highWater.Load()
 	}
 }
 
