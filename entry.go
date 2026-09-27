@@ -1,5 +1,7 @@
 package slidingcache
 
+import "slices"
+
 // bucket packs one Precision bucket of a key into a single 8-byte word: the
 // bucket timestamp in the high bits and the number of events that landed in it
 // in the low bits. How the word is split is not fixed by this type; a
@@ -98,24 +100,34 @@ func (l bucketLayout) floor(timestamp int64) bucket { return bucket(timestamp <<
 
 // entry holds the buckets of a single key.
 //
+// The buckets the key retains are buckets[head:]. The words before head expired
+// and were discounted from total by an earlier prune; they are kept, unread,
+// only so that the entry can later compact its retained buckets into their room
+// instead of reallocating (see makeRoom).
+//
 // Invariants, maintained by every method below:
 //
-//   - buckets is sorted by timestamp, non-decreasing. Adjacent buckets share a
-//     timestamp only when the earlier one is full, which is how a bucket that
-//     outgrows the count of one word spills into the next.
-//   - every count is >= 1: a bucket exists only once an event landed in it.
-//   - total equals the sum of the counts, expired buckets included. It is the
-//     number of events physically retained, which liveCount and prune keep in
-//     step with the slice.
-//   - len(buckets) is bounded by WindowSize/Precision once the key has been
+//   - buckets[head:] is sorted by timestamp, non-decreasing. Adjacent buckets
+//     share a timestamp only when the earlier one is full, which is how a bucket
+//     that outgrows the count of one word spills into the next. Every word before
+//     head is older than every timestamp the cache can still accept, so a search
+//     or an insert over the whole slice never stops before head.
+//   - every count in buckets[head:] is >= 1: a bucket exists only once an event
+//     landed in it.
+//   - total equals the sum of the counts in buckets[head:], expired buckets not
+//     yet pruned included. It is the number of events physically retained, which
+//     liveCount and prune keep in step with the slice.
+//   - head < len(buckets), or head == len(buckets) == 0.
+//   - len(buckets)-head is bounded by WindowSize/Precision once the key has been
 //     pruned, regardless of the event rate, because the live window spans that
 //     many distinct timestamps, plus one extra word per full bucket count that a
-//     single timestamp receives. Between a prune and the next one the
-//     length may exceed the bound by the expired prefix, which the next Store or
-//     sweep of the key drops.
+//     single timestamp receives. Between a prune and the next one the length
+//     may exceed the bound by the expired prefix, which the next Store or sweep
+//     of the key drops.
 type entry struct {
 	buckets []bucket
 	total   int
+	head    int
 }
 
 // newEntry returns the entry of a key whose first event landed at timestamp.
@@ -189,6 +201,12 @@ func (e *entry) recordOutOfOrder(l bucketLayout, timestamp int64) {
 // overflow: cutoff is derived from a high-water mark minus a WindowSize of at
 // least one second, and lowerBound saturates on a cutoff that lies outside the
 // representable bucket range.
+//
+// The index is never below head. Get and the janitor read the cutoff before
+// they take the shard lock, so a concurrent Store can prune the entry with a
+// newer cutoff in between; the buckets the older cutoff would still call alive
+// have then already been discounted from total, exactly as if prune had dropped
+// them.
 func (e *entry) firstAlive(l bucketLayout, cutoff int64) int {
 	return e.lowerBound(l, cutoff+1)
 }
@@ -200,11 +218,11 @@ func (e *entry) firstAlive(l bucketLayout, cutoff int64) int {
 // The cutoff moves forward one bucket at a time, so a key stored or read at
 // least once per bucket finds at most its oldest bucket expired: nothing on
 // every call but the first of a bucket, and the oldest bucket on that one.
-// prune and liveCount therefore ask aliveFrom 0 and then 1 before they search
-// the entry, which settles almost every call from its first two words. The
-// check compares the unpacked timestamp, so it cannot overflow whatever the
-// cutoff, and it stays within the inliner's budget, which firstAlive does only
-// without these checks.
+// prune and liveCount therefore ask aliveFrom head and then head+1 before they
+// search the entry, which settles almost every call from its first two
+// retained words. The check compares the unpacked timestamp, so it cannot
+// overflow whatever the cutoff, and it stays within the inliner's budget, which
+// firstAlive does only without these checks.
 func (e *entry) aliveFrom(l bucketLayout, i int, cutoff int64) bool {
 	return i >= len(e.buckets) || l.timestamp(e.buckets[i]) > cutoff
 }
@@ -222,16 +240,16 @@ func (e *entry) aliveFrom(l bucketLayout, i int, cutoff int64) bool {
 // WindowSize/Precision buckets. The worst case is half the entry.
 func (e *entry) liveCount(l bucketLayout, cutoff int64) int {
 	switch {
-	case e.aliveFrom(l, 0, cutoff):
+	case e.aliveFrom(l, e.head, cutoff):
 		return e.total
-	case e.aliveFrom(l, 1, cutoff):
-		return e.total - l.count(e.buckets[0])
+	case e.aliveFrom(l, e.head+1, cutoff):
+		return e.total - l.count(e.buckets[e.head])
 	}
 	firstAlive := e.firstAlive(l, cutoff)
-	if expired, alive := firstAlive, len(e.buckets)-firstAlive; alive < expired {
+	if expired, alive := firstAlive-e.head, len(e.buckets)-firstAlive; alive < expired {
 		return sumCounts(l, e.buckets[firstAlive:])
 	}
-	return e.total - sumCounts(l, e.buckets[:firstAlive])
+	return e.total - sumCounts(l, e.buckets[e.head:firstAlive])
 }
 
 // sumCounts returns the number of events held in buckets.
@@ -243,9 +261,13 @@ func sumCounts(l bucketLayout, buckets []bucket) int {
 	return sum
 }
 
-// lowerBound returns the index of the first bucket with a timestamp >= target,
-// or len when there is none. It compares packed words against the word target
-// floors to, so the search never unpacks a bucket.
+// lowerBound returns the index of the first retained bucket with a timestamp
+// >= target, or len when there is none. It compares packed words against the
+// word target floors to, so the search never unpacks a bucket. It searches from
+// head, not from the start of the array: the answer is never in the pruned
+// prefix, and a search that starts at the retained buckets takes the same path
+// every time a steadily written key drops its oldest bucket, which the branch
+// predictor learns, where one over the whole array would shift with head.
 //
 // A target outside the representable range saturates instead of being packed:
 // shifting it into a word would overflow and wrap the comparison around. This is
@@ -258,13 +280,13 @@ func sumCounts(l bucketLayout, buckets []bucket) int {
 // bounded window produces.
 func (e *entry) lowerBound(l bucketLayout, target int64) int {
 	if target <= l.minTimestamp {
-		return 0
+		return e.head
 	}
 	if target > l.maxTimestamp {
 		return len(e.buckets)
 	}
 	floor := l.floor(target)
-	low, high := 0, len(e.buckets)
+	low, high := e.head, len(e.buckets)
 	for low < high {
 		mid := int(uint(low+high) >> 1)
 		if e.buckets[mid] < floor {
@@ -285,25 +307,26 @@ func (e *entry) lowerBound(l bucketLayout, target int64) int {
 //
 //   - Right-sizing, when the backing array is much larger than the survivors:
 //     they are copied into an exact-fit slice so the large array is collected
-//     instead of being pinned by a re-slice.
+//     instead of staying pinned.
 //   - A copy to the front, for a survivor run of at most pruneCopyMaxLen:
 //     shifting those buckets is cheaper than the repeated reallocation that
-//     re-slicing forward brings on an entry of that size.
-//   - A forward re-slice, for a long survivor run: dropping the prefix costs
-//     nothing per call, and the next append that outgrows the remaining capacity
-//     reclaims the array while copying only the survivors.
+//     moving head forward brings on an entry of that size.
+//   - Moving head forward, for a long survivor run: dropping the prefix costs
+//     nothing per call, and the room it leaves at the front of the array is
+//     reclaimed in one copy once the array fills up (see makeRoom).
 func (e *entry) prune(l bucketLayout, cutoff int64) {
 	var firstAlive int
 	switch {
-	case e.aliveFrom(l, 0, cutoff):
+	case e.aliveFrom(l, e.head, cutoff):
 		return
-	case e.aliveFrom(l, 1, cutoff):
-		firstAlive = 1
+	case e.aliveFrom(l, e.head+1, cutoff):
+		firstAlive = e.head + 1
 	default:
 		firstAlive = e.firstAlive(l, cutoff)
 	}
-	e.total -= sumCounts(l, e.buckets[:firstAlive])
+	e.total -= sumCounts(l, e.buckets[e.head:firstAlive])
 	if firstAlive == len(e.buckets) {
+		e.head = 0
 		if shouldRightSize(cap(e.buckets), 0) {
 			e.buckets = nil
 		} else {
@@ -314,15 +337,76 @@ func (e *entry) prune(l bucketLayout, cutoff int64) {
 
 	alive := e.buckets[firstAlive:]
 	if shouldRightSize(cap(e.buckets), len(alive)) {
-		e.buckets = append([]bucket(nil), alive...)
+		e.buckets, e.head = append([]bucket(nil), alive...), 0
 		return
 	}
 	if len(alive) <= pruneCopyMaxLen {
-		e.buckets = e.buckets[:copy(e.buckets, alive)]
+		e.buckets, e.head = e.buckets[:copy(e.buckets, alive)], 0
 		return
 	}
-	e.buckets = alive
+	e.head = firstAlive
 }
+
+// needsRoom reports whether recording one more event at timestamp would append
+// to a backing array that has no room left, which is when shard.store calls
+// makeRoom first. Repeats of the newest bucket are increments and need none, so
+// a hot key whose array happens to be full never reaches makeRoom.
+func (e *entry) needsRoom(l bucketLayout, timestamp int64) bool {
+	n := len(e.buckets)
+	return n == cap(e.buckets) && (n == 0 || !l.accepts(e.buckets[n-1], timestamp))
+}
+
+// makeRoom gives a full backing array room for one more bucket before an append,
+// so that append never grows it on its own terms. It is off the hot path: an
+// entry reaches it once per stretch of appends that fills the room it left.
+//
+// When the pruned prefix at the front of the array is at least 1/compactionRatio
+// of the retained buckets, those are copied to the front: an entry that has
+// filled its window slides forward one bucket per Precision, and compacting it
+// in place costs at most compactionRatio words of copy per bucket appended and
+// no allocation at all. Otherwise the retained buckets move to a larger array,
+// sized by grownCapacity.
+func (e *entry) makeRoom(windowBuckets int) {
+	retained := e.buckets[e.head:]
+	if e.head > 0 && e.head >= len(retained)/compactionRatio {
+		e.buckets, e.head = e.buckets[:copy(e.buckets, retained)], 0
+		return
+	}
+	grown := slices.Grow([]bucket(nil), grownCapacity(len(retained), windowBuckets))
+	e.buckets, e.head = append(grown, retained...), 0
+}
+
+// grownCapacity is the capacity, before rounding up to a size class, that a full
+// entry retaining n buckets grows to: what append would grow it to, except that
+// a long entry does not grow past its window.
+//
+// append adds about a quarter to a long slice, so an entry filling a window of
+// 1,800 buckets would land in the 2,560-word size class and carry 760 words it
+// can never use, since pruning holds it at the window: 42% on top of its data,
+// for every key of a long window. A window plus 1/compactionRatio fits the
+// 2,048-word class instead and still leaves the entry the room makeRoom
+// compacts into. An entry that retains more words than its window has buckets,
+// because its buckets spill, is given the same proportion of room above what it
+// retains. Short entries keep append's doubling, which pruneCopyMaxLen is tuned
+// against.
+func grownCapacity(n, windowBuckets int) int {
+	if n < appendGrowthThreshold {
+		return max(2*n, 1)
+	}
+	appendGrowth := n + (n+3*appendGrowthThreshold)/4
+	bound := max(n, windowBuckets)
+	return min(appendGrowth, bound+bound/compactionRatio+1)
+}
+
+// appendGrowthThreshold is the length at which the runtime's append stops
+// doubling a slice and starts growing it by about a quarter.
+const appendGrowthThreshold = 256
+
+// compactionRatio bounds the copying makeRoom does: it compacts only when the
+// pruned prefix is at least 1/compactionRatio of the retained buckets, and
+// grownCapacity leaves at least that much room, so each word copied buys room
+// for at least 1/compactionRatio of a bucket.
+const compactionRatio = 8
 
 // pruneCopyMaxLen is the survivor count up to which prune shifts the survivors
 // to the front of the backing array instead of re-slicing forward.
