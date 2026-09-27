@@ -3,6 +3,7 @@ package slidingcache
 import (
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"reflect"
 	"slices"
 	"sync"
@@ -1344,6 +1345,62 @@ func TestGetOnFullyExpiredEntryWithoutStore(t *testing.T) {
 	if got := c.bucketBreadth("quiet"); got != 1 {
 		t.Fatalf("retained buckets after the Store = %d, want 1 (expired prefix not pruned)", got)
 	}
+}
+
+// TestPruneAndLiveCountMatchDefinitionAtEveryCutoff pins both readers of the
+// expired prefix to their definition, the events held in buckets newer than the
+// cutoff, on random entries cut at every position: before the oldest bucket,
+// right after it, after the newest, and anywhere in between, as well as at the
+// cutoffs that saturate the search at either end of the representable range.
+// The narrowest layout makes the hot buckets spill, so an oldest bucket that
+// spans two words expires in one step, which the one-word check after the
+// oldest must not mistake for a single expired bucket.
+func TestPruneAndLiveCountMatchDefinitionAtEveryCutoff(t *testing.T) {
+	const (
+		trials     = 100
+		timestamps = 64
+		hotBuckets = 4
+	)
+	layout := newBucketLayout(minCountBits)
+	rng := rand.New(rand.NewPCG(1, 2))
+
+	for trial := range trials {
+		e := &entry{}
+		for range rng.IntN(4 * layout.maxCount) {
+			span := int64(timestamps)
+			if rng.IntN(2) == 0 {
+				span = hotBuckets
+			}
+			e.insert(layout, rng.Int64N(span))
+		}
+
+		for _, cutoff := range append(sequence(-1, timestamps+2), math.MinInt64, layout.maxTimestamp) {
+			want := eventsNewerThan(layout, e, cutoff)
+			if got := e.liveCount(layout, cutoff); got != want {
+				t.Fatalf("trial %d: liveCount(%d) = %d, want %d", trial, cutoff, got, want)
+			}
+
+			pruned := &entry{buckets: slices.Clone(e.buckets), total: e.total}
+			pruned.prune(layout, cutoff)
+			if pruned.total != want || eventsNewerThan(layout, pruned, cutoff) != want {
+				t.Fatalf("trial %d: prune(%d) kept total %d and %d live events, want %d of both",
+					trial, cutoff, pruned.total, eventsNewerThan(layout, pruned, cutoff), want)
+			}
+			if !pruned.aliveFrom(layout, 0, cutoff) {
+				t.Fatalf("trial %d: prune(%d) left an expired bucket first", trial, cutoff)
+			}
+		}
+	}
+}
+
+func eventsNewerThan(l bucketLayout, e *entry, cutoff int64) int {
+	events := 0
+	for _, b := range e.buckets {
+		if l.timestamp(b) > cutoff {
+			events += l.count(b)
+		}
+	}
+	return events
 }
 
 // TestStoreSameBucketBoundedMemory pins the memory bound the run-length encoding

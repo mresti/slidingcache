@@ -193,6 +193,22 @@ func (e *entry) firstAlive(l bucketLayout, cutoff int64) int {
 	return e.lowerBound(l, cutoff+1)
 }
 
+// aliveFrom reports whether every bucket from index i on is still alive under
+// cutoff, which holds trivially when the entry has no bucket at i. Because
+// buckets are sorted, one word answers it: the one at i.
+//
+// The cutoff moves forward one bucket at a time, so a key stored or read at
+// least once per bucket finds at most its oldest bucket expired: nothing on
+// every call but the first of a bucket, and the oldest bucket on that one.
+// prune and liveCount therefore ask aliveFrom 0 and then 1 before they search
+// the entry, which settles almost every call from its first two words. The
+// check compares the unpacked timestamp, so it cannot overflow whatever the
+// cutoff, and it stays within the inliner's budget, which firstAlive does only
+// without these checks.
+func (e *entry) aliveFrom(l bucketLayout, i int, cutoff int64) bool {
+	return i >= len(e.buckets) || l.timestamp(e.buckets[i]) > cutoff
+}
+
 // liveCount returns how many of the entry's events are still alive without
 // mutating it.
 //
@@ -202,6 +218,12 @@ func (e *entry) firstAlive(l bucketLayout, cutoff int64) int {
 // worst case is a key that was written and then left untouched until all of its
 // buckets expired, where the scan is bounded by WindowSize/Precision buckets.
 func (e *entry) liveCount(l bucketLayout, cutoff int64) int {
+	switch {
+	case e.aliveFrom(l, 0, cutoff):
+		return e.total
+	case e.aliveFrom(l, 1, cutoff):
+		return e.total - l.count(e.buckets[0])
+	}
 	live := e.total
 	for i := range e.firstAlive(l, cutoff) {
 		live -= l.count(e.buckets[i])
@@ -259,9 +281,14 @@ func (e *entry) lowerBound(l bucketLayout, target int64) int {
 //     nothing per call, and the next append that outgrows the remaining capacity
 //     reclaims the array while copying only the survivors.
 func (e *entry) prune(l bucketLayout, cutoff int64) {
-	firstAlive := e.firstAlive(l, cutoff)
-	if firstAlive == 0 {
+	var firstAlive int
+	switch {
+	case e.aliveFrom(l, 0, cutoff):
 		return
+	case e.aliveFrom(l, 1, cutoff):
+		firstAlive = 1
+	default:
+		firstAlive = e.firstAlive(l, cutoff)
 	}
 	for i := range firstAlive {
 		e.total -= l.count(e.buckets[i])
