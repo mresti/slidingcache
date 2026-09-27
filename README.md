@@ -82,7 +82,9 @@ configured with `MaxFutureSkew`, both return `-2`
 [Future events and the `-2` sentinel](#future-events-and-the--2-sentinel).
 
 `New` returns a `*Cache`, which implements `SlidingCache` and additionally
-exposes `Close() error` to stop the background janitor.
+exposes `Close() error` to stop the background janitor and
+`HighWater() (int64, bool)` to read the window's anchor; see
+[Diagnostics](#diagnostics).
 
 > **Naming note.** A more idiomatic Go API would be an interface named
 > `SlidingWindowCounter` with methods `Add(epoch, key) int` and
@@ -263,6 +265,54 @@ anchored to the global high-water mark; the epoch passed to `Get` is used solely
 to detect an out-of-window query, not to widen or shift the window. As a
 consequence, `Get` with a very small epoch (for example `0`) against a cache
 whose high-water mark has advanced past `WindowSize` returns `-1`.
+
+## Diagnostics
+
+### `HighWater()`
+
+```go
+func (c *Cache) HighWater() (hw int64, ok bool)
+```
+
+Reports the current high-water mark and whether `Store` has ever accepted an
+event. On a cache that has never stored anything `ok` is `false` and the `hw`
+returned with it is an internal sentinel below every usable epoch: it carries no
+meaning and must not be used.
+
+`hw` is **not** expressed in `Config.EpochUnit`. It is always a number of
+**seconds** of bucket timestamp, truncated to `Precision`, whatever unit `Store`
+and `Get` take. Multiply it by the unit to compare it against the epochs you
+feed in:
+
+| `EpochUnit` | epoch equivalent of `hw` |
+|---|---|
+| `EpochInSeconds` | `hw` |
+| `EpochInMillis` | `hw * 1e3` |
+| `EpochInNanos` | `hw * 1e9` |
+
+The call is a single atomic load (~0.3 ns, no allocation) and is safe to make
+concurrently with `Store` and `Get`. It reflects the mark at the instant of that
+load, which a concurrent `Store` may already have moved forward.
+
+**Typical use.** Export it as a gauge and watch its distance from the current
+second:
+
+```go
+if hw, ok := cache.HighWater(); ok {
+    metrics.HighWaterLagSeconds.Set(float64(time.Now().Unix() - hw))
+}
+```
+
+- `now - hw` **growing** means nothing is advancing the window: the producer has
+  stopped, or every event arrives already expired and is rejected with `-1`.
+- `hw - now` **large** means the window has been dragged into the future by a bad
+  timestamp — a wrong unit that still lands inside the representable range, or a
+  badly skewed producer clock. The mark never moves backwards, so from that
+  point every real event looks late and the only recovery is a new cache; see
+  [High-water mark](#high-water-mark).
+
+Alert on both directions: the first catches a stalled pipeline, the second
+catches the poisoning that no amount of correct traffic undoes.
 
 ## Configuration
 

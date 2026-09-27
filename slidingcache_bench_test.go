@@ -417,6 +417,23 @@ func BenchmarkPruneCopyThreshold(b *testing.B) {
 	}
 }
 
+// highWaterSink keeps the loop below from being optimized away: HighWater is a
+// single atomic load whose result is otherwise unused.
+var highWaterSink int64
+
+// BenchmarkHighWater measures the diagnostics read. Its name is deliberately
+// outside the Store/Get/Sweep/Memory families, like BenchmarkPruneCopyThreshold,
+// so it stays out of the throughput comparisons saved by test-bench-save.
+func BenchmarkHighWater(b *testing.B) {
+	c := benchCache(b)
+	c.Store(1_700_000_000, "hot")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		highWaterSink, _ = c.HighWater()
+	}
+}
+
 // benchFutureConfig arms the future guard with a clock parked far beyond every
 // epoch the benchmarks use, so the measurements cover the cost of the guard on
 // accepted events rather than its rejection path.
