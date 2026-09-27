@@ -1,0 +1,96 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/mresti/slidingcache
+cpu: Apple M2
+                                            │ benchmarks/pr-fast-path-live-count-serial.txt │ benchmarks/pr-entry-compaction-serial.txt │
+                                            │                    sec/op                     │      sec/op        vs base                │
+StoreSingleKey                                                                  24.21n ± 0%         20.30n ± 0%  -16.13% (p=0.000 n=10)
+StoreManyKeys                                                                   33.85n ± 0%         34.83n ± 0%   +2.88% (p=0.000 n=10)
+GetHit                                                                          16.39n ± 0%         16.46n ± 0%   +0.46% (p=0.000 n=10)
+GetMiss                                                                         14.79n ± 0%         14.77n ± 0%   -0.17% (p=0.000 n=10)
+StoreSteadyState/keys=1000                                                      29.10n ± 1%         31.12n ± 2%   +6.94% (p=0.000 n=10)
+StoreSteadyState/keys=10000                                                     28.63n ± 0%         29.86n ± 0%   +4.30% (p=0.000 n=10)
+StoreSteadyState/keys=100000                                                    33.80n ± 0%         35.07n ± 0%   +3.77% (p=0.000 n=10)
+StoreLateReject                                                                 7.382n ± 0%         7.385n ± 0%        ~ (p=0.927 n=10)
+GetHitManyKeys                                                                  27.79n ± 0%         28.18n ± 0%   +1.42% (p=0.000 n=10)
+StoreOutOfOrder                                                                 59.09n ± 0%         58.56n ± 0%   -0.90% (p=0.000 n=10)
+Sweep/keys=10000                                                                84.63µ ± 1%         88.07µ ± 1%   +4.07% (p=0.000 n=10)
+Sweep/keys=100000                                                               833.8µ ± 1%         875.3µ ± 2%   +4.98% (p=0.000 n=10)
+MemoryFootprint                                                                 59.81m ± 1%         62.07m ± 0%   +3.77% (p=0.000 n=10)
+StoreHotKeySameBucket                                                           17.60n ± 0%         17.38n ± 0%   -1.25% (p=0.000 n=10)
+StoreMediumCardinalitySameBucket/keys=100                                       25.33n ± 1%         26.35n ± 0%   +4.05% (p=0.000 n=10)
+StoreMediumCardinalitySameBucket/keys=1000                                      23.87n ± 2%         25.11n ± 2%   +5.19% (p=0.000 n=10)
+StoreMediumCardinalitySameBucket/keys=10000                                     26.85n ± 0%         27.66n ± 0%   +3.02% (p=0.000 n=10)
+StoreHotKeyNanos                                                                17.66n ± 0%         17.52n ± 0%   -0.79% (p=0.000 n=10)
+StoreFutureReject                                                               8.966n ± 0%         9.047n ± 0%   +0.91% (p=0.000 n=10)
+StoreAdvancingHighWater/skew=off                                                24.99n ± 0%         21.15n ± 0%  -15.37% (p=0.000 n=10)
+StoreAdvancingHighWater/skew=on                                                 26.45n ± 0%         22.64n ± 0%  -14.37% (p=0.000 n=10)
+StoreSteadyStateWithSkew/keys=1000                                              32.25n ± 1%         34.49n ± 1%   +6.91% (p=0.000 n=10)
+StoreSteadyStateWithSkew/keys=10000                                             31.81n ± 0%         33.05n ± 0%   +3.88% (p=0.000 n=10)
+StoreSteadyStateWithSkew/keys=100000                                            37.03n ± 0%         38.57n ± 0%   +4.14% (p=0.000 n=10)
+geomean                                                                         95.43n              95.69n        +0.27%
+
+                                            │ benchmarks/pr-fast-path-live-count-serial.txt │ benchmarks/pr-entry-compaction-serial.txt │
+                                            │                     B/op                      │     B/op      vs base                     │
+StoreSingleKey                                                                 26.00 ± 0%        0.00 ± 0%  -100.00% (p=0.000 n=10)
+StoreManyKeys                                                                  0.000 ± 0%       0.000 ± 0%         ~ (p=1.000 n=10) ¹
+GetHit                                                                         0.000 ± 0%       0.000 ± 0%         ~ (p=1.000 n=10) ¹
+GetMiss                                                                        0.000 ± 0%       0.000 ± 0%         ~ (p=1.000 n=10) ¹
+StoreSteadyState/keys=1000                                                     0.000 ± 0%       0.000 ± 0%         ~ (p=1.000 n=10) ¹
+StoreSteadyState/keys=10000                                                    0.000 ± 0%       0.000 ± 0%         ~ (p=1.000 n=10) ¹
+StoreSteadyState/keys=100000                                                   0.000 ± 0%       0.000 ± 0%         ~ (p=1.000 n=10) ¹
+StoreLateReject                                                                0.000 ± 0%       0.000 ± 0%         ~ (p=1.000 n=10) ¹
+GetHitManyKeys                                                                 0.000 ± 0%       0.000 ± 0%         ~ (p=1.000 n=10) ¹
+StoreOutOfOrder                                                                18.00 ± 0%        0.00 ± 0%  -100.00% (p=0.000 n=10)
+Sweep/keys=10000                                                               0.000 ± 0%       0.000 ± 0%         ~ (p=1.000 n=10) ¹
+Sweep/keys=100000                                                              0.000 ± 0%       0.000 ± 0%         ~ (p=1.000 n=10) ¹
+MemoryFootprint                                                              33.37Mi ± 0%     34.89Mi ± 0%    +4.57% (p=0.000 n=10)
+StoreHotKeySameBucket                                                          0.000 ± 0%       0.000 ± 0%         ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=100                                      0.000 ± 0%       0.000 ± 0%         ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=1000                                     0.000 ± 0%       0.000 ± 0%         ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=10000                                    0.000 ± 0%       0.000 ± 0%         ~ (p=1.000 n=10) ¹
+StoreHotKeyNanos                                                               0.000 ± 0%       0.000 ± 0%         ~ (p=1.000 n=10) ¹
+StoreFutureReject                                                              0.000 ± 0%       0.000 ± 0%         ~ (p=1.000 n=10) ¹
+StoreAdvancingHighWater/skew=off                                               26.00 ± 0%        0.00 ± 0%  -100.00% (p=0.000 n=10)
+StoreAdvancingHighWater/skew=on                                                26.00 ± 0%        0.00 ± 0%  -100.00% (p=0.000 n=10)
+StoreSteadyStateWithSkew/keys=1000                                             0.000 ± 0%       0.000 ± 0%         ~ (p=1.000 n=10) ¹
+StoreSteadyStateWithSkew/keys=10000                                            0.000 ± 0%       0.000 ± 0%         ~ (p=1.000 n=10) ¹
+StoreSteadyStateWithSkew/keys=100000                                           0.000 ± 0%       0.000 ± 0%         ~ (p=1.000 n=10) ¹
+geomean                                                                                   ²                 ?                       ² ³
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+³ ratios must be >0 to compute geomean
+
+                                            │ benchmarks/pr-fast-path-live-count-serial.txt │ benchmarks/pr-entry-compaction-serial.txt │
+                                            │                   allocs/op                   │    allocs/op      vs base                 │
+StoreSingleKey                                                                 0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreManyKeys                                                                  0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+GetHit                                                                         0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+GetMiss                                                                        0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyState/keys=1000                                                     0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyState/keys=10000                                                    0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyState/keys=100000                                                   0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreLateReject                                                                0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+GetHitManyKeys                                                                 0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreOutOfOrder                                                                0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Sweep/keys=10000                                                               0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Sweep/keys=100000                                                              0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+MemoryFootprint                                                               600.8k ± 0%          600.8k ± 0%       ~ (p=1.000 n=10) ¹
+StoreHotKeySameBucket                                                          0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=100                                      0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=1000                                     0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=10000                                    0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreHotKeyNanos                                                               0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreFutureReject                                                              0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreAdvancingHighWater/skew=off                                               0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreAdvancingHighWater/skew=on                                                0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyStateWithSkew/keys=1000                                             0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyStateWithSkew/keys=10000                                            0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyStateWithSkew/keys=100000                                           0.000 ± 0%           0.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                                   ²                     +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                │ benchmarks/pr-fast-path-live-count-serial.txt │ benchmarks/pr-entry-compaction-serial.txt │
+                │                   bytes/key                   │     bytes/key       vs base               │
+MemoryFootprint                                      195.0 ± 0%           211.0 ± 0%  +8.21% (p=0.000 n=10)
