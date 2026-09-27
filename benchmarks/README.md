@@ -1,42 +1,59 @@
 # Benchmarks
 
-Resultados guardados por PR para comparar con benchstat. Extensión `.txt` (`*.out` está en .gitignore).
+Results saved per PR so they can be compared with benchstat. The extension is
+`.txt` (`*.out` is in .gitignore).
 
-| Archivo | Qué es |
+| File | What it is |
 |---|---|
-| `baseline-v1.2.0-serial.txt` | `^Benchmark(Store|Get|Sweep|Memory)` -count=10 -cpu=1 en main (v1.2.0) |
-| `baseline-v1.2.0-parallel.txt` | `^BenchmarkParallel` -count=10 -cpu=4 en main (v1.2.0) |
-| `*.benchstat.txt` | resumen benchstat de un fichero |
-| `<pr>-serial.txt`, `<pr>-parallel.txt` | post del PR |
+| `baseline-v1.2.0-serial.txt` | `^Benchmark(Store|Get|Sweep|Memory)` -count=10 -cpu=1 on main (v1.2.0) |
+| `baseline-v1.2.0-parallel.txt` | `^BenchmarkParallel` -count=10 -cpu=4 on main (v1.2.0) |
+| `*.benchstat.txt` | benchstat summary of a single file |
+| `<pr>-serial.txt`, `<pr>-parallel.txt` | post-change results of that PR |
 | `<pr>-vs-baseline-{serial,parallel}.txt` | `benchstat baseline <pr>` |
-| `pr-a-future-skew-serial.txt` | post de PR-A (guard de futuro), serial |
-| `pr-a-future-skew-parallel.txt` | post de PR-A, parallel |
-| `pr-a-future-skew-vs-baseline-{serial,parallel}.txt` | PR-A vs baseline v1.2.0 |
+| `pr-b-highwater-serial.txt` | PR-B (HighWater) post, serial |
+| `pr-b-highwater-parallel.txt` | PR-B post, parallel |
+| `pr-b-highwater-vs-baseline-{serial,parallel}.txt` | PR-B vs baseline v1.2.0 |
+| `pr-c-stats-serial.txt` | PR-C (Stats) post, serial |
+| `pr-c-stats-parallel.txt` | PR-C post, parallel |
+| `pr-c-stats-vs-baseline-{serial,parallel}.txt` | PR-C vs baseline v1.2.0 |
 
-Generar post + comparación:
+Generate the post results plus the comparison:
 ```
-make test-bench-save PR=pr-a-future-skew
+make test-bench-save PR=pr-c-stats
 ```
-El target escribe la cabecera (go version, CPU, cores, commit, fecha) y luego los
-dos `go test -bench`; después lanza benchstat contra el baseline.
-Gate: delta <= 3% en StoreManyKeys, StoreHotKeyNanos, GetHitManyKeys, ParallelStore; 0 allocs en Store/Get.
-Benches nuevos en PR-A (solo aparecen en el fichero post, sin fila en el
-baseline): `StoreFutureReject`, `StoreAdvancingHighWater/skew={off,on}`,
-`StoreSteadyStateWithSkew/keys=*`.
+The target writes the header (go version, CPU, cores, commit, date) and then the
+two `go test -bench` runs; afterwards it runs benchstat against the baseline.
+Gate: delta <= 3% on StoreManyKeys, StoreHotKeyNanos, GetHitManyKeys and
+ParallelStore; 0 allocs in Store/Get.
 
-Generar post + comparación:
+PR-B does not touch the hot path: its post results must match the baseline within
+the noise.
+
+PR-C adds counters to both paths — a plain increment under the shard lock that is
+already held on the accepted path, and an atomic on the rejection paths only — so
+it is measured against the same gate, with `ParallelStore` as the sensitive case
+since it would expose false sharing. Two results are worth reading before the
+table:
+
+- `StoreLateReject` goes from 2.0 ns to 6.0 ns (+198%). It is not in the gate.
+  The rejection paths now hash the key to find the shard that owns the counter,
+  which is the cost the design deliberately moves off the accepted path.
+- The parallel benchmarks come out **faster** than the baseline (`ParallelStore`
+  -28%, at 16 shards -27%). The counters made the shard struct outgrow its
+  64-byte size class, so fewer shards share a cache line and the default 16-shard
+  configuration false-shares less than it used to. The effect fades as the shard
+  count rises (`shards=256`: -0.9%), which is consistent with that reading.
+  A first attempt that placed the lock-guarded counters after `keys` and `peak`
+  put them on a second cache line and cost `ParallelGet` +25%; keeping every
+  written field adjacent to `mu` removed it.
+
+The diagnostics benchmarks, `BenchmarkHighWater` and `BenchmarkStats`, are
+deliberately named outside the `Store|Get|Sweep|Memory` families (like
+`BenchmarkPruneCopyThreshold`), so they do not appear in these files; they are
+measured separately:
 ```
-make test-bench-save PR=pr-b-highwater
-```
-El target escribe la cabecera (go version, CPU, cores, commit, fecha) y luego los
-dos `go test -bench`; después lanza benchstat contra el baseline.
-Gate: delta <= 3% en StoreManyKeys, StoreHotKeyNanos, GetHitManyKeys, ParallelStore; 0 allocs en Store/Get.
-PR-B no toca el hot path: el post debe ser identico al baseline dentro del ruido.
-Su bench nuevo, `BenchmarkHighWater`, queda fuera de las familias
-`Store|Get|Sweep|Memory` a proposito (como `BenchmarkPruneCopyThreshold`), asi que
-no aparece en estos ficheros; se mide aparte:
-```
-go test -run '^$' -bench '^BenchmarkHighWater$' -benchmem -cpu=1 .
+go test -run '^$' -bench '^Benchmark(HighWater|Stats)$' -benchmem -cpu=1 .
 ```
 
-Máquina baseline: Apple M2 (8 cores), go1.27.0, darwin/arm64. Repetir baseline en el host de prod antes de comparar cifras absolutas.
+Baseline machine: Apple M2 (8 cores), go1.27.0, darwin/arm64. Re-run the baseline
+on the production host before comparing absolute figures.

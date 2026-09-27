@@ -1,0 +1,37 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/mresti/slidingcache
+cpu: Apple M2
+                                 │ benchmarks/baseline-v1.2.0-parallel.txt │  benchmarks/pr-c-stats-parallel.txt  │
+                                 │                 sec/op                  │    sec/op     vs base                │
+ParallelGet-4                                                 13.66n ± 17%   12.98n ± 21%   -4.98% (p=0.005 n=10)
+ParallelMixed-4                                               14.01n ±  1%   12.84n ±  2%   -8.28% (p=0.000 n=10)
+ParallelStore-4                                               18.57n ±  2%   13.41n ± 18%  -27.77% (p=0.000 n=10)
+ParallelStoreShards/shards=16-4                               18.30n ±  1%   13.38n ± 33%  -26.89% (p=0.000 n=10)
+ParallelStoreShards/shards=64-4                               14.88n ±  1%   13.92n ± 11%        ~ (p=0.138 n=10)
+ParallelStoreShards/shards=256-4                              13.60n ±  1%   13.47n ±  1%   -0.92% (p=0.005 n=10)
+geomean                                                       15.36n         13.33n        -13.24%
+
+                                 │ benchmarks/baseline-v1.2.0-parallel.txt │ benchmarks/pr-c-stats-parallel.txt  │
+                                 │                  B/op                   │    B/op     vs base                 │
+ParallelGet-4                                                 0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelMixed-4                                               0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStore-4                                               0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=16-4                               0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=64-4                               0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=256-4                              0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                  ²               +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                 │ benchmarks/baseline-v1.2.0-parallel.txt │ benchmarks/pr-c-stats-parallel.txt  │
+                                 │                allocs/op                │ allocs/op   vs base                 │
+ParallelGet-4                                                 0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelMixed-4                                               0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStore-4                                               0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=16-4                               0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=64-4                               0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=256-4                              0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                  ²               +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean

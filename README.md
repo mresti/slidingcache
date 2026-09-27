@@ -82,9 +82,9 @@ configured with `MaxFutureSkew`, both return `-2`
 [Future events and the `-2` sentinel](#future-events-and-the--2-sentinel).
 
 `New` returns a `*Cache`, which implements `SlidingCache` and additionally
-exposes `Close() error` to stop the background janitor and
-`HighWater() (int64, bool)` to read the window's anchor; see
-[Diagnostics](#diagnostics).
+exposes `Close() error` to stop the background janitor,
+`HighWater() (int64, bool)` to read the window's anchor, and `Stats() Stats` to
+read the per-outcome counters; see [Diagnostics](#diagnostics).
 
 > **Naming note.** A more idiomatic Go API would be an interface named
 > `SlidingWindowCounter` with methods `Add(epoch, key) int` and
@@ -313,6 +313,82 @@ if hw, ok := cache.HighWater(); ok {
 
 Alert on both directions: the first catches a stalled pipeline, the second
 catches the poisoning that no amount of correct traffic undoes.
+
+### `Stats()`
+
+```go
+func (c *Cache) Stats() Stats
+```
+
+Returns a snapshot of the counters the cache keeps for every outcome `Store` and
+`Get` can have:
+
+| Field | Type | Counts |
+|---|---|---|
+| `Accepted` | `uint64` | `Store` calls that recorded an event (returned a count `>= 1`). |
+| `Late` | `uint64` | `Store` calls rejected as late (`-1`, timestamp at or below `HW − WindowSize`). |
+| `Future` | `uint64` | `Store` calls rejected as too far ahead of the clock. Always `0` in this version; see below. |
+| `OutOfRange` | `uint64` | `Store` calls rejected because the bucket timestamp is not representable (`-1`, beyond `±2^(63−CountBits)` seconds). |
+| `GetHit` | `uint64` | `Get` calls that found the key, whatever count they returned — a key whose events have all expired is a hit that returns `0`. |
+| `GetMiss` | `uint64` | `Get` calls for a key the cache does not hold (returned `0`). |
+| `GetLate` | `uint64` | `Get` calls that returned `-1`, whether the epoch is outside the live window or not representable. Neither a hit nor a miss: the key is never looked up. |
+| `GetFuture` | `uint64` | `Get` calls rejected as too far ahead of the clock. Always `0` in this version. |
+| `Keys` | `int` | Keys the shards currently hold, expired-but-not-yet-removed ones included. |
+
+Every call increments exactly one counter, so the counters partition the traffic:
+
+```
+Accepted + Late + Future + OutOfRange == Store calls
+GetHit + GetMiss + GetLate + GetFuture == Get calls
+```
+
+**Not an atomic snapshot.** `Stats` walks the shards one by one, so a burst of
+concurrent traffic can be counted in the shards it visits late and missed in
+those it visits early. Each counter is individually exact and the skew is bounded
+by the duration of the call, which makes the result good for metrics and unfit as
+a synchronization point. The counters are monotonic for the life of the cache and
+there is no reset: take deltas between two calls to get rates.
+
+**Cost.** The accepted paths pay a plain increment under the shard lock they
+already hold; the rejections pay one atomic add on the shard that owns the key.
+`Stats` itself takes each shard's lock in turn, briefly serializing against that
+shard's operations — about 2.5 µs over 256 shards, allocation-free. Call it on a
+metrics interval (10s or so), not per request.
+
+**Typical export.** The eight counters are monotonic and map onto counter
+metrics; `Keys` is a gauge:
+
+```go
+for range time.Tick(10 * time.Second) {
+    s := cache.Stats()
+    metrics.StoreAccepted.Set(float64(s.Accepted)) // a counter metric, exported as-is
+    metrics.StoreLate.Set(float64(s.Late))
+    metrics.StoreFuture.Set(float64(s.Future))
+    metrics.StoreOutOfRange.Set(float64(s.OutOfRange))
+    metrics.GetHit.Set(float64(s.GetHit))
+    metrics.GetMiss.Set(float64(s.GetMiss))
+    metrics.GetLate.Set(float64(s.GetLate))
+    metrics.Keys.Set(float64(s.Keys)) // a gauge
+}
+```
+
+What to alert on:
+
+- **`Late` rate** climbing means events are arriving after their window closed:
+  a lagging producer, a backed-up queue, or a high-water mark dragged forward by
+  a bad timestamp. Cross-check with `HighWater()`, which distinguishes the two.
+- **`OutOfRange` rate** above zero is almost always a unit mistake — nanoseconds
+  fed to a cache configured for seconds. It should be flat at zero in a healthy
+  deployment.
+- **`Future` rate** is the mirror of `Late`: producers whose clocks run ahead.
+- **`GetLate` rate** rising while `Late` is flat means readers are querying with
+  stale epochs rather than writers producing them.
+- **`Keys`** is the memory gauge. A steady climb means keys are being created
+  faster than the janitor removes them; see [Memory management](#memory-management).
+
+`Future` and `GetFuture` exist so the metric names and dashboards can be wired up
+now. They stay at `0` until `MaxFutureSkew` and the `-2` sentinel land, at which
+point they start counting without any change to the export above.
 
 ## Configuration
 
