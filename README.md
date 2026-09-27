@@ -327,12 +327,12 @@ Returns a snapshot of the counters the cache keeps for every outcome `Store` and
 |---|---|---|
 | `Accepted` | `uint64` | `Store` calls that recorded an event (returned a count `>= 1`). |
 | `Late` | `uint64` | `Store` calls rejected as late (`-1`, timestamp at or below `HW − WindowSize`). |
-| `Future` | `uint64` | `Store` calls rejected as too far ahead of the clock. Always `0` in this version; see below. |
+| `Future` | `uint64` | `Store` calls rejected as too far ahead of the clock. Returned `-2`; stays `0` while `MaxFutureSkew` is disabled. |
 | `OutOfRange` | `uint64` | `Store` calls rejected because the bucket timestamp is not representable (`-1`, beyond `±2^(63−CountBits)` seconds). |
 | `GetHit` | `uint64` | `Get` calls that found the key, whatever count they returned — a key whose events have all expired is a hit that returns `0`. |
 | `GetMiss` | `uint64` | `Get` calls for a key the cache does not hold (returned `0`). |
 | `GetLate` | `uint64` | `Get` calls that returned `-1`, whether the epoch is outside the live window or not representable. Neither a hit nor a miss: the key is never looked up. |
-| `GetFuture` | `uint64` | `Get` calls rejected as too far ahead of the clock. Always `0` in this version. |
+| `GetFuture` | `uint64` | `Get` calls rejected as too far ahead of the clock (`-2`). Stays `0` while `MaxFutureSkew` is disabled. |
 | `Keys` | `int` | Keys the shards currently hold, expired-but-not-yet-removed ones included. |
 
 Every call increments exactly one counter, so the counters partition the traffic:
@@ -350,7 +350,8 @@ a synchronization point. The counters are monotonic for the life of the cache an
 there is no reset: take deltas between two calls to get rates.
 
 **Cost.** The accepted paths pay a plain increment under the shard lock they
-already hold; the rejections pay one atomic add on the shard that owns the key.
+already hold; the rejections pay one atomic add on the shard that owns the key,
+which means hashing the key to find that shard.
 `Stats` itself takes each shard's lock in turn, briefly serializing against that
 shard's operations — about 2.5 µs over 256 shards, allocation-free. Call it on a
 metrics interval (10s or so), not per request.
