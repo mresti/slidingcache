@@ -1917,26 +1917,32 @@ func statsDelta(before, after Stats) Stats {
 	}
 }
 
-// TestStatsFutureCountersStayZero pins the placeholders: nothing in this version
-// returns the -2 sentinel, so the two future counters must not move whatever the
-// traffic. The MaxFutureSkew change wires them up.
-func TestStatsFutureCountersStayZero(t *testing.T) {
-	c := newTestCache(t, Config{Precision: time.Second, WindowSize: 300 * time.Second, EpochUnit: EpochInSeconds})
+// TestStatsCountsFutureRejectsExactlyOnce pins that each -2 moves its own
+// counter, Future for Store and GetFuture for Get, and no other.
+func TestStatsCountsFutureRejectsExactlyOnce(t *testing.T) {
+	const (
+		second    = int64(time.Second)
+		now       = 1_700_000_000 * second
+		farFuture = now + 3*3600*second
+	)
+	c := newTestCache(t, futureSkewConfig(newFakeClock(now)))
+	c.Store(now, "anchor")
+	before := c.Stats()
 
-	c.Store(1_000, "k")
-	c.Store(1_000_000_000, "k")
-	c.Store(1, "k")
-	c.Store(testLayout.maxTimestamp+1, "k")
-	c.Get(1_000_000_000, "k")
-	c.Get(1, "k")
+	for range 3 {
+		if got := c.Store(farFuture, "k"); got != FutureEvent {
+			t.Fatalf("Store three hours ahead = %d, want %d", got, FutureEvent)
+		}
+	}
+	for range 2 {
+		if got := c.Get(farFuture, "k"); got != FutureEvent {
+			t.Fatalf("Get three hours ahead = %d, want %d", got, FutureEvent)
+		}
+	}
 
-	stats := c.Stats()
-	if stats.Future != 0 || stats.GetFuture != 0 {
-		t.Fatalf(
-			"Future = %d, GetFuture = %d, want 0 and 0 until the future guard lands",
-			stats.Future,
-			stats.GetFuture,
-		)
+	want := Stats{Future: 3, GetFuture: 2}
+	if got := statsDelta(before, c.Stats()); got != want {
+		t.Fatalf("counters moved by %+v, want %+v", got, want)
 	}
 }
 
@@ -1949,11 +1955,14 @@ func TestStatsAccountsForEveryCallUnderConcurrency(t *testing.T) {
 		opsPerWorker = 500
 		baseEpoch    = 1_000_000
 	)
+	clock := newFakeClock(baseEpoch + workers*opsPerWorkerStride)
 	c := newTestCache(t, Config{
-		Precision:  time.Second,
-		WindowSize: 60 * time.Second,
-		EpochUnit:  EpochInSeconds,
-		Shards:     16,
+		Precision:     time.Second,
+		WindowSize:    60 * time.Second,
+		EpochUnit:     EpochInSeconds,
+		Shards:        16,
+		MaxFutureSkew: 60 * time.Second,
+		Clock:         clock.read,
 	})
 
 	var wg sync.WaitGroup
@@ -1978,19 +1987,23 @@ func TestStatsAccountsForEveryCallUnderConcurrency(t *testing.T) {
 	if gets := stats.GetHit + stats.GetMiss + stats.GetLate + stats.GetFuture; gets != wantCalls {
 		t.Fatalf("read counters sum to %d, want %d Get calls (%+v)", gets, wantCalls, stats)
 	}
-	if stats.Late == 0 || stats.OutOfRange == 0 {
-		t.Fatalf("the mixed workload produced no late or out-of-range rejects: %+v", stats)
+	if stats.Late == 0 || stats.OutOfRange == 0 || stats.Future == 0 || stats.GetFuture == 0 {
+		t.Fatalf("the mixed workload missed a late, out-of-range or future reject: %+v", stats)
 	}
 }
 
-// mixedEpoch spreads a worker's operations over live, long-expired, and
-// unrepresentable timestamps so that a concurrent run exercises every counter.
+// mixedEpoch spreads a worker's operations over live, long-expired,
+// unrepresentable and future-dated timestamps so that a concurrent run exercises
+// every counter. The future-dated ones lie far past the clock the concurrency
+// test pins just after the last live timestamp.
 func mixedEpoch(baseEpoch int64, worker, i int) int64 {
-	switch i % 4 {
+	switch i % 5 {
 	case 0:
 		return 0 // far behind the mark once any worker has advanced it.
 	case 1:
 		return testLayout.maxTimestamp + 1
+	case 2:
+		return baseEpoch + 1_000_000
 	default:
 		return baseEpoch + int64(worker*opsPerWorkerStride+i)
 	}

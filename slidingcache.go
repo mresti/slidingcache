@@ -482,6 +482,7 @@ func (c *Cache) Store(epoch int64, keyInHash string) int {
 	highWater := c.highWater.Load()
 	if timestamp > highWater {
 		if c.maxFutureSkew > 0 && c.isFuture(timestamp) {
+			c.shardFor(keyInHash).rejects.future.Add(1)
 			return FutureEvent
 		}
 		highWater = c.advanceHighWater(timestamp, highWater)
@@ -509,6 +510,7 @@ func (c *Cache) Get(epoch int64, keyInHash string) int {
 	}
 	highWater := c.highWater.Load()
 	if timestamp > highWater && c.maxFutureSkew > 0 && c.isFuture(timestamp) {
+		c.shardFor(keyInHash).rejects.getFuture.Add(1)
 		return FutureEvent
 	}
 	cutoff := cutoffFor(highWater, c.windowSize)
@@ -560,9 +562,9 @@ type Stats struct {
 	// Late counts the Store calls rejected as late, with a bucket timestamp at or
 	// below HW - WindowSize. They returned -1 and stored nothing.
 	Late uint64
-	// Future counts the Store calls rejected as too far ahead of the clock. It is
-	// always 0 in this version: the counter is wired up by the MaxFutureSkew
-	// change, which introduces the -2 sentinel it belongs to.
+	// Future counts the Store calls rejected as too far ahead of the clock. They
+	// returned -2 and left the high-water mark untouched; it stays 0 while
+	// Config.MaxFutureSkew is disabled.
 	Future uint64
 	// OutOfRange counts the Store calls rejected because the bucket timestamp is
 	// not representable, beyond +-2^(63-CountBits) seconds. They returned -1 and
@@ -581,7 +583,7 @@ type Stats struct {
 	// nor a miss.
 	GetLate uint64
 	// GetFuture counts the Get calls rejected as too far ahead of the clock.
-	// Like Future, it is always 0 until the MaxFutureSkew change wires it up.
+	// They returned -2; like Future, it stays 0 while MaxFutureSkew is disabled.
 	GetFuture uint64
 	// Keys is the number of keys the cache currently holds, summed over the
 	// shards. It counts keys with events still physically retained, which
