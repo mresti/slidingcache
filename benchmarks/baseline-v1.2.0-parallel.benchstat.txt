@@ -1,0 +1,35 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/mresti/slidingcache
+cpu: Apple M2
+                                 │ benchmarks/baseline-v1.2.0-parallel.txt │
+                                 │                 sec/op                  │
+ParallelGet-4                                                 13.66n ± 17%
+ParallelMixed-4                                               14.01n ±  1%
+ParallelStore-4                                               18.57n ±  2%
+ParallelStoreShards/shards=16-4                               18.30n ±  1%
+ParallelStoreShards/shards=64-4                               14.88n ±  1%
+ParallelStoreShards/shards=256-4                              13.60n ±  1%
+geomean                                                       15.36n
+
+                                 │ benchmarks/baseline-v1.2.0-parallel.txt │
+                                 │                  B/op                   │
+ParallelGet-4                                                 0.000 ± 0%
+ParallelMixed-4                                               0.000 ± 0%
+ParallelStore-4                                               0.000 ± 0%
+ParallelStoreShards/shards=16-4                               0.000 ± 0%
+ParallelStoreShards/shards=64-4                               0.000 ± 0%
+ParallelStoreShards/shards=256-4                              0.000 ± 0%
+geomean                                                                  ¹
+¹ summaries must be >0 to compute geomean
+
+                                 │ benchmarks/baseline-v1.2.0-parallel.txt │
+                                 │                allocs/op                │
+ParallelGet-4                                                 0.000 ± 0%
+ParallelMixed-4                                               0.000 ± 0%
+ParallelStore-4                                               0.000 ± 0%
+ParallelStoreShards/shards=16-4                               0.000 ± 0%
+ParallelStoreShards/shards=64-4                               0.000 ± 0%
+ParallelStoreShards/shards=256-4                              0.000 ± 0%
+geomean                                                                  ¹
+¹ summaries must be >0 to compute geomean

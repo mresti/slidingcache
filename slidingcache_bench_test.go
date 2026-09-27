@@ -416,3 +416,71 @@ func BenchmarkPruneCopyThreshold(b *testing.B) {
 		})
 	}
 }
+
+// benchFutureConfig arms the future guard with a clock parked far beyond every
+// epoch the benchmarks use, so the measurements cover the cost of the guard on
+// accepted events rather than its rejection path.
+func benchFutureConfig() Config {
+	const clockFarAhead = int64(1) << 40
+	cfg := benchConfig()
+	cfg.MaxFutureSkew = 5 * time.Minute
+	cfg.Clock = func() int64 { return clockFarAhead }
+	return cfg
+}
+
+// BenchmarkStoreFutureReject measures the rejection fast path of the guard:
+// every op is dated an hour past a clock five minutes tolerant, so it is refused
+// before any shard, CAS or map lookup is touched.
+func BenchmarkStoreFutureReject(b *testing.B) {
+	const now = 1_700_000_000
+	cfg := benchConfig()
+	cfg.MaxFutureSkew = 5 * time.Minute
+	cfg.Clock = func() int64 { return now }
+	c := newBenchCache(b, cfg)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		c.Store(now+3600, "future")
+	}
+}
+
+// BenchmarkStoreAdvancingHighWater is the worst case for the guard: every op
+// opens a new bucket, so every op advances the high-water mark and pays a clock
+// call. The skew=off arm is the same workload without the guard, so the pair
+// prices the clock call itself.
+func BenchmarkStoreAdvancingHighWater(b *testing.B) {
+	cases := []struct {
+		name string
+		cfg  Config
+	}{
+		{"skew=off", benchConfig()},
+		{"skew=on", benchFutureConfig()},
+	}
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			c := newBenchCache(b, tc.cfg)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := range b.N {
+				c.Store(int64(i), "advancing")
+			}
+		})
+	}
+}
+
+// BenchmarkStoreSteadyStateWithSkew mirrors BenchmarkStoreSteadyState with the
+// guard armed, so the two can be compared directly: the guard must not move the
+// steady-state storage cost.
+func BenchmarkStoreSteadyStateWithSkew(b *testing.B) {
+	for _, keys := range []int{1_000, 10_000, 100_000} {
+		b.Run(fmt.Sprintf("keys=%d", keys), func(b *testing.B) {
+			c := newBenchCache(b, benchFutureConfig())
+			keySet := makeKeys(keys)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				c.Store(int64(i), keySet[i%keys])
+			}
+		})
+	}
+}
