@@ -1,0 +1,93 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/mresti/slidingcache
+cpu: Apple M2
+                                            │ benchmarks/baseline-v1.3.0-serial.txt │
+                                            │                sec/op                 │
+StoreSingleKey                                                          32.63n ± 0%
+StoreManyKeys                                                           34.29n ± 0%
+GetHit                                                                  16.68n ± 1%
+GetMiss                                                                 14.78n ± 0%
+StoreSteadyState/keys=1000                                              31.02n ± 0%
+StoreSteadyState/keys=10000                                             29.98n ± 1%
+StoreSteadyState/keys=100000                                            34.94n ± 0%
+StoreLateReject                                                         7.382n ± 0%
+GetHitManyKeys                                                          28.78n ± 0%
+StoreOutOfOrder                                                         68.92n ± 1%
+Sweep/keys=10000                                                        94.48µ ± 1%
+Sweep/keys=100000                                                       896.0µ ± 1%
+MemoryFootprint                                                         60.63m ± 1%
+StoreHotKeySameBucket                                                   19.03n ± 0%
+StoreMediumCardinalitySameBucket/keys=100                               26.39n ± 1%
+StoreMediumCardinalitySameBucket/keys=1000                              24.23n ± 1%
+StoreMediumCardinalitySameBucket/keys=10000                             27.00n ± 0%
+StoreHotKeyNanos                                                        21.21n ± 0%
+StoreFutureReject                                                       8.935n ± 0%
+StoreAdvancingHighWater/skew=off                                        33.49n ± 0%
+StoreAdvancingHighWater/skew=on                                         34.91n ± 1%
+StoreSteadyStateWithSkew/keys=1000                                      33.86n ± 0%
+StoreSteadyStateWithSkew/keys=10000                                     32.09n ± 0%
+StoreSteadyStateWithSkew/keys=100000                                    37.48n ± 1%
+geomean                                                                 102.9n
+
+                                            │ benchmarks/baseline-v1.3.0-serial.txt │
+                                            │                 B/op                  │
+StoreSingleKey                                                         26.00 ± 0%
+StoreManyKeys                                                          0.000 ± 0%
+GetHit                                                                 0.000 ± 0%
+GetMiss                                                                0.000 ± 0%
+StoreSteadyState/keys=1000                                             0.000 ± 0%
+StoreSteadyState/keys=10000                                            0.000 ± 0%
+StoreSteadyState/keys=100000                                           0.000 ± 0%
+StoreLateReject                                                        0.000 ± 0%
+GetHitManyKeys                                                         0.000 ± 0%
+StoreOutOfOrder                                                        18.00 ± 0%
+Sweep/keys=10000                                                       0.000 ± 0%
+Sweep/keys=100000                                                      0.000 ± 0%
+MemoryFootprint                                                      33.37Mi ± 0%
+StoreHotKeySameBucket                                                  0.000 ± 0%
+StoreMediumCardinalitySameBucket/keys=100                              0.000 ± 0%
+StoreMediumCardinalitySameBucket/keys=1000                             0.000 ± 0%
+StoreMediumCardinalitySameBucket/keys=10000                            0.000 ± 0%
+StoreHotKeyNanos                                                       0.000 ± 0%
+StoreFutureReject                                                      0.000 ± 0%
+StoreAdvancingHighWater/skew=off                                       26.00 ± 0%
+StoreAdvancingHighWater/skew=on                                        26.00 ± 0%
+StoreSteadyStateWithSkew/keys=1000                                     0.000 ± 0%
+StoreSteadyStateWithSkew/keys=10000                                    0.000 ± 0%
+StoreSteadyStateWithSkew/keys=100000                                   0.000 ± 0%
+geomean                                                                           ¹
+¹ summaries must be >0 to compute geomean
+
+                                            │ benchmarks/baseline-v1.3.0-serial.txt │
+                                            │               allocs/op               │
+StoreSingleKey                                                         0.000 ± 0%
+StoreManyKeys                                                          0.000 ± 0%
+GetHit                                                                 0.000 ± 0%
+GetMiss                                                                0.000 ± 0%
+StoreSteadyState/keys=1000                                             0.000 ± 0%
+StoreSteadyState/keys=10000                                            0.000 ± 0%
+StoreSteadyState/keys=100000                                           0.000 ± 0%
+StoreLateReject                                                        0.000 ± 0%
+GetHitManyKeys                                                         0.000 ± 0%
+StoreOutOfOrder                                                        0.000 ± 0%
+Sweep/keys=10000                                                       0.000 ± 0%
+Sweep/keys=100000                                                      0.000 ± 0%
+MemoryFootprint                                                       600.8k ± 0%
+StoreHotKeySameBucket                                                  0.000 ± 0%
+StoreMediumCardinalitySameBucket/keys=100                              0.000 ± 0%
+StoreMediumCardinalitySameBucket/keys=1000                             0.000 ± 0%
+StoreMediumCardinalitySameBucket/keys=10000                            0.000 ± 0%
+StoreHotKeyNanos                                                       0.000 ± 0%
+StoreFutureReject                                                      0.000 ± 0%
+StoreAdvancingHighWater/skew=off                                       0.000 ± 0%
+StoreAdvancingHighWater/skew=on                                        0.000 ± 0%
+StoreSteadyStateWithSkew/keys=1000                                     0.000 ± 0%
+StoreSteadyStateWithSkew/keys=10000                                    0.000 ± 0%
+StoreSteadyStateWithSkew/keys=100000                                   0.000 ± 0%
+geomean                                                                           ¹
+¹ summaries must be >0 to compute geomean
+
+                │ benchmarks/baseline-v1.3.0-serial.txt │
+                │               bytes/key               │
+MemoryFootprint                              195.0 ± 0%

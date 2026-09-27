@@ -7,6 +7,8 @@ Results saved per PR so they can be compared with benchstat. The extension is
 |---|---|
 | `baseline-v1.2.0-serial.txt` | `^Benchmark(Store|Get|Sweep|Memory)` -count=10 -cpu=1 on main (v1.2.0) |
 | `baseline-v1.2.0-parallel.txt` | `^BenchmarkParallel` -count=10 -cpu=4 on main (v1.2.0) |
+| `baseline-v1.3.0-serial.txt` | `^Benchmark(Store|Get|Sweep|Memory)` -count=10 -cpu=1 on main (v1.3.0) |
+| `baseline-v1.3.0-parallel.txt` | `^BenchmarkParallel` -count=10 -cpu=4 on main (v1.3.0) |
 | `*.benchstat.txt` | benchstat summary of a single file |
 | `<pr>-serial.txt`, `<pr>-parallel.txt` | post-change results of that PR |
 | `<pr>-vs-baseline-{serial,parallel}.txt` | `benchstat baseline <pr>` |
@@ -23,6 +25,10 @@ make test-bench-save PR=pr-c-stats
 ```
 The target writes the header (go version, CPU, cores, commit, date) and then the
 two `go test -bench` runs; afterwards it runs benchstat against the baseline.
+Changes made on top of v1.3.0 compare against its baseline instead:
+```
+make test-bench-save PR=<name> BASELINE=benchmarks/baseline-v1.3.0
+```
 Gate: delta <= 3% on StoreManyKeys, StoreHotKeyNanos, GetHitManyKeys and
 ParallelStore; 0 allocs in Store/Get.
 
