@@ -510,8 +510,11 @@ bounded through four mechanisms:
    never removes the key itself: an entry emptied by pruning is immediately
    refilled by the incoming event, and keys that stop receiving events are
    deleted only by the background sweep. `Get` is read-only: it discounts the
-   expired prefix from the cached total, located by binary search, and never
-   mutates the cache.
+   expired prefix from the cached total, or sums the live buckets when they are
+   fewer, and never mutates the cache. A key stored or read at least once per
+   bucket has at most its oldest bucket expired, which both paths settle from
+   the first two buckets without a search; a key left idle for a whole window
+   costs a search and no scan.
 3. **Background sweep.** A janitor goroutine (a `time.Ticker`) periodically scans
    all shards, prunes expired buckets, and deletes keys left without events.
 4. **Right-sizing and map compaction.** When a key's bucket slice has a backing

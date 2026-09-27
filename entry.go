@@ -212,11 +212,14 @@ func (e *entry) aliveFrom(l bucketLayout, i int, cutoff int64) bool {
 // liveCount returns how many of the entry's events are still alive without
 // mutating it.
 //
-// It subtracts the expired prefix from the cached total, so the cost is the
-// length of that prefix. The prefix is empty for any key stored or swept since
-// the cutoff last moved past its oldest bucket, which is the common case; the
-// worst case is a key that was written and then left untouched until all of its
-// buckets expired, where the scan is bounded by WindowSize/Precision buckets.
+// Because total counts the expired prefix too, the live count is both total
+// minus the prefix and the sum of the live suffix, and liveCount sums whichever
+// of the two is shorter. The prefix is empty or a single bucket for any key
+// stored or read since the cutoff last moved, which is the common case and
+// aliveFrom settles without a search. A key that was written and then left
+// untouched until all of its buckets expired has an empty suffix instead, so it
+// costs the search and no scan, where subtracting its prefix would walk
+// WindowSize/Precision buckets. The worst case is half the entry.
 func (e *entry) liveCount(l bucketLayout, cutoff int64) int {
 	switch {
 	case e.aliveFrom(l, 0, cutoff):
@@ -224,11 +227,20 @@ func (e *entry) liveCount(l bucketLayout, cutoff int64) int {
 	case e.aliveFrom(l, 1, cutoff):
 		return e.total - l.count(e.buckets[0])
 	}
-	live := e.total
-	for i := range e.firstAlive(l, cutoff) {
-		live -= l.count(e.buckets[i])
+	firstAlive := e.firstAlive(l, cutoff)
+	if expired, alive := firstAlive, len(e.buckets)-firstAlive; alive < expired {
+		return sumCounts(l, e.buckets[firstAlive:])
 	}
-	return live
+	return e.total - sumCounts(l, e.buckets[:firstAlive])
+}
+
+// sumCounts returns the number of events held in buckets.
+func sumCounts(l bucketLayout, buckets []bucket) int {
+	sum := 0
+	for _, b := range buckets {
+		sum += l.count(b)
+	}
+	return sum
 }
 
 // lowerBound returns the index of the first bucket with a timestamp >= target,
@@ -290,9 +302,7 @@ func (e *entry) prune(l bucketLayout, cutoff int64) {
 	default:
 		firstAlive = e.firstAlive(l, cutoff)
 	}
-	for i := range firstAlive {
-		e.total -= l.count(e.buckets[i])
-	}
+	e.total -= sumCounts(l, e.buckets[:firstAlive])
 	if firstAlive == len(e.buckets) {
 		if shouldRightSize(cap(e.buckets), 0) {
 			e.buckets = nil

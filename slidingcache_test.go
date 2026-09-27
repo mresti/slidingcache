@@ -1350,8 +1350,9 @@ func TestGetOnFullyExpiredEntryWithoutStore(t *testing.T) {
 // TestPruneAndLiveCountMatchDefinitionAtEveryCutoff pins both readers of the
 // expired prefix to their definition, the events held in buckets newer than the
 // cutoff, on random entries cut at every position: before the oldest bucket,
-// right after it, after the newest, and anywhere in between, as well as at the
-// cutoffs that saturate the search at either end of the representable range.
+// right after it, after the newest, and anywhere in between, so liveCount sums
+// both the expired prefix and the live suffix, as well as at the cutoffs that
+// saturate the search at either end of the representable range.
 // The narrowest layout makes the hot buckets spill, so an oldest bucket that
 // spans two words expires in one step, which the one-word check after the
 // oldest must not mistake for a single expired bucket.
