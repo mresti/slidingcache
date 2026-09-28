@@ -19,6 +19,14 @@ import (
 // unpack buckets through it.
 var testLayout = newBucketLayout(defaultCountBits)
 
+// reachOf is the furthest a timestamp can lie after an entry's base in words of
+// type W: 2^(32-countBits) - 1 seconds for a 4-byte word, whose low bits wrap
+// past it, and 2^(63-countBits) - 1 for an 8-byte one, whose offsets past it
+// would unpack as negative.
+func reachOf[W word](l bucketLayout) int64 {
+	return int64(1)<<(min(int(unsafe.Sizeof(W(0)))*8, 63)-int(l.countBits)) - 1
+}
+
 // newTestCache builds a Cache with a long sweep interval so the background
 // janitor never interferes with deterministic assertions. Tests that need
 // sweeping call c.sweep() directly.
@@ -35,12 +43,53 @@ func newTestCache(t *testing.T, cfg Config) *Cache {
 	return c
 }
 
+// newTestCacheWithWords is newTestCache on words of wordBits bits instead of
+// the ones New would pick: wideWordBits, which holds any window, or what
+// cfg.wordBits() returns.
+func newTestCacheWithWords(t *testing.T, cfg Config, wordBits int) *Cache {
+	t.Helper()
+	if cfg.SweepInterval == 0 {
+		cfg.SweepInterval = time.Hour
+	}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("config %+v is invalid: %v", cfg, err)
+	}
+	c, err := newCache(cfg, wordBits, nil)
+	if err != nil {
+		t.Fatalf("newCache(%+v, %d) returned error: %v", cfg, wordBits, err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}
+
 func (c *Cache) totalKeys() int {
 	total := 0
-	for _, s := range c.shards {
-		total += s.size()
+	for _, size := range c.shardSizes() {
+		total += size
 	}
 	return total
+}
+
+// shardSizes returns how many keys each shard holds, in shard order.
+func (c *Cache) shardSizes() []int {
+	var sizes []int
+	for _, s := range c.narrowShards {
+		sizes = append(sizes, s.size())
+	}
+	for _, s := range c.wideShards {
+		sizes = append(sizes, s.size())
+	}
+	return sizes
+}
+
+// storeInShard runs the store of key's shard directly, without the checks
+// Cache.Store makes before it takes the shard lock.
+func (c *Cache) storeInShard(key string, timestamp int64) int {
+	i := c.shardIndex(key)
+	if c.narrowShards != nil {
+		return c.narrowShards[i].store(key, timestamp, &c.highWater, c.windowSize)
+	}
+	return c.wideShards[i].store(key, timestamp, &c.highWater, c.windowSize)
 }
 
 func TestStoreOnNewKeyReturnsOneAndIncrements(t *testing.T) {
@@ -533,8 +582,8 @@ func TestValidConfigDefaults(t *testing.T) {
 	}
 	defer c.Close()
 
-	if len(c.shards) != defaultShards {
-		t.Fatalf("shard count = %d, want default %d", len(c.shards), defaultShards)
+	if got := len(c.shardSizes()); got != defaultShards {
+		t.Fatalf("shard count = %d, want default %d", got, defaultShards)
 	}
 	if c.sweepEvery != 60*time.Second {
 		t.Fatalf("sweepEvery = %s, want 60s (WindowSize default)", c.sweepEvery)
@@ -614,7 +663,7 @@ func TestSweepCompactsShrunkenMap(t *testing.T) {
 		t,
 		Config{Precision: time.Second, WindowSize: 10 * time.Second, EpochUnit: EpochInSeconds, Shards: 1},
 	)
-	shard := c.shards[0]
+	shard := c.narrowShards[0]
 
 	const keys = 4000 // above mapCompactMinPeak so compaction can trigger.
 	for k := range keys {
@@ -664,12 +713,13 @@ func TestWithHashFuncRoutesByCustomHash(t *testing.T) {
 		c.Store(1000, fmt.Sprintf("key-%d", k))
 	}
 
-	if got := c.shards[0].size(); got != keys {
-		t.Fatalf("shards[0].size() = %d, want %d", got, keys)
+	sizes := c.shardSizes()
+	if sizes[0] != keys {
+		t.Fatalf("shard 0 holds %d keys, want %d", sizes[0], keys)
 	}
-	for i := 1; i < len(c.shards); i++ {
-		if got := c.shards[i].size(); got != 0 {
-			t.Fatalf("shards[%d].size() = %d, want 0", i, got)
+	for i := 1; i < len(sizes); i++ {
+		if sizes[i] != 0 {
+			t.Fatalf("shard %d holds %d keys, want 0", i, sizes[i])
 		}
 	}
 }
@@ -708,19 +758,47 @@ func secondsConfig() Config {
 	return Config{Precision: time.Second, WindowSize: 3600 * time.Second, EpochUnit: EpochInSeconds}
 }
 
-// retainedEvents reports how many events are physically retained for key,
-// those in expired buckets included, or -1 when the key is absent. It
-// distinguishes "counted as zero" from "actually removed".
-func (c *Cache) retainedEvents(key string) int {
-	s := c.shardFor(key)
+// entryShape is what the white-box tests read of a key's entry: the events it
+// physically retains, the words it retains them in, and the size of its backing
+// array.
+type entryShape struct {
+	events, words, arrayBytes int
+}
+
+// shapeOf reads key's entry under its shard's lock, or reports false when the
+// key is absent.
+func (c *Cache) shapeOf(key string) (entryShape, bool) {
+	i := c.shardIndex(key)
+	if c.narrowShards != nil {
+		return shapeIn(c.narrowShards[i], key)
+	}
+	return shapeIn(c.wideShards[i], key)
+}
+
+func shapeIn[W word](s *shard[W], key string) (entryShape, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	e, ok := s.keys[key]
 	if !ok {
+		return entryShape{}, false
+	}
+	return entryShape{
+		events:     e.total,
+		words:      len(e.retained()),
+		arrayBytes: cap(e.buckets) * int(unsafe.Sizeof(W(0))),
+	}, true
+}
+
+// retainedEvents reports how many events are physically retained for key,
+// those in expired buckets included, or -1 when the key is absent. It
+// distinguishes "counted as zero" from "actually removed".
+func (c *Cache) retainedEvents(key string) int {
+	shape, ok := c.shapeOf(key)
+	if !ok {
 		return -1
 	}
-	return e.total
+	return shape.events
 }
 
 // bucketBreadth reports how many Precision buckets are physically retained for
@@ -728,33 +806,25 @@ func (c *Cache) retainedEvents(key string) int {
 // the memory the key's events occupy, which the run-length encoding keeps
 // independent of the event rate.
 func (c *Cache) bucketBreadth(key string) int {
-	s := c.shardFor(key)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	e, ok := s.keys[key]
+	shape, ok := c.shapeOf(key)
 	if !ok {
 		return -1
 	}
-	return len(e.retained())
+	return shape.words
 }
 
 // retained returns the buckets the entry still counts in total: those after the
 // pruned prefix it keeps for room.
-func (e *entry) retained() []bucket { return e.buckets[e.head:] }
+func (e *entry[W]) retained() []W { return e.buckets[e.head:] }
 
 // arrayBytes reports the size of key's backing array, pruned prefix and unused
 // room included, or -1 when the key is absent: the memory the key's buckets pin.
 func (c *Cache) arrayBytes(key string) int {
-	s := c.shardFor(key)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	e, ok := s.keys[key]
+	shape, ok := c.shapeOf(key)
 	if !ok {
 		return -1
 	}
-	return cap(e.buckets) * int(unsafe.Sizeof(bucket(0)))
+	return shape.arrayBytes
 }
 
 func TestRoundUpPow2(t *testing.T) {
@@ -809,7 +879,7 @@ func TestStoreRejectsTimestampExpiredByConcurrentHighWaterAdvance(t *testing.T) 
 	c.Store(1000, "a") // HW = 1000, cutoff = 940: t=950 is alive here.
 	c.advanceHighWater(2000, c.highWater.Load())
 
-	if got := c.shardFor("a").store("a", 950, &c.highWater, c.windowSize); got != LateEvent {
+	if got := c.storeInShard("a", 950); got != LateEvent {
 		t.Fatalf("store under an advanced high-water mark = %d, want %d", got, LateEvent)
 	}
 	if got := c.retainedEvents("a"); got != 1 {
@@ -994,14 +1064,17 @@ func (m *windowModel) get(epoch int64, key string) int {
 	return m.count(key)
 }
 
+// count returns the key's live events and forgets the expired ones, which the
+// high-water mark, only ever moving forward, can never bring back.
 func (m *windowModel) count(key string) int {
-	live := 0
+	live := m.events[key][:0]
 	for _, timestamp := range m.events[key] {
 		if m.alive(timestamp) {
-			live++
+			live = append(live, timestamp)
 		}
 	}
-	return live
+	m.events[key] = live
+	return len(live)
 }
 
 // FuzzStoreGetInvariants drives arbitrary Store/Get sequences over a handful of
@@ -1056,7 +1129,8 @@ func foldCountBits(b byte) int {
 
 // requireModelAgreement replays ops against a cache of the given width and the
 // reference model, asserting that every return value agrees and that the live
-// counts left behind at the end do too.
+// counts left behind at the end do too. It replays them twice, once on the
+// words New picks and once on 8-byte words, so the fuzzer checks both widths.
 //
 // The base is folded into the representable bucket range, so the offsets
 // fuzzOperand adds stay well inside int64 and cannot overflow the reference
@@ -1079,13 +1153,23 @@ func requireModelAgreement(t *testing.T, countBits int, base int64, ops []byte) 
 		ops = ops[:maxFuzzOps]
 	}
 
-	c := newTestCache(t, Config{
+	cfg := Config{
 		Precision:  precision * time.Second,
 		WindowSize: windowSize * time.Second,
 		EpochUnit:  EpochInSeconds,
 		CountBits:  countBits,
-	})
-	model := newWindowModel(precision, windowSize, layout)
+	}
+	for _, wordBits := range []int{cfg.wordBits(), wideWordBits} {
+		c := newTestCacheWithWords(t, cfg, wordBits)
+		replayAgainstModel(t, c, newWindowModel(precision, windowSize, layout), base, ops)
+	}
+}
+
+// replayAgainstModel is requireModelAgreement on one cache.
+func replayAgainstModel(t *testing.T, c *Cache, model *windowModel, base int64, ops []byte) {
+	t.Helper()
+	countBits := c.layout.countBits
+	precision := c.precision
 
 	for _, op := range ops {
 		key, epoch := fuzzOperand(base, op, precision)
@@ -1138,14 +1222,14 @@ func fuzzOperand(base int64, op byte, precision int64) (string, int64) {
 func TestEntryInvariantsHoldForMixedArrivals(t *testing.T) {
 	arrivals := []int64{10, 20, 30, 30, 30, 20, 15, 10, 40, 40, 5, 5, 25}
 
-	e := &entry{}
+	e := &entry[uint32]{}
 	for i, timestamp := range arrivals {
 		e.insert(testLayout, timestamp)
-		requireEntryInvariants(t, e)
+		requireEntryInvariants(t, testLayout, e)
 
 		want := slices.Clone(arrivals[:i+1])
 		slices.Sort(want)
-		if got := e.expanded(); !slices.Equal(got, want) {
+		if got := e.expanded(testLayout); !slices.Equal(got, want) {
 			t.Fatalf("after arrival %d (insert %d): events = %v, want %v", i, timestamp, got, want)
 		}
 	}
@@ -1156,7 +1240,7 @@ func TestEntryInvariantsHoldForMixedArrivals(t *testing.T) {
 // the slice untouched, so a hot key's memory tracks elapsed time and not the
 // event rate.
 func TestEntryRecordInOrderIncrementsNewestBucket(t *testing.T) {
-	e := &entry{buckets: make([]bucket, 0, 16)} // pre-grown so append cannot reallocate.
+	e := &entry[uint32]{buckets: make([]uint32, 0, 16)} // pre-grown so append cannot reallocate.
 	for _, timestamp := range []int64{1, 2, 3} {
 		e.insert(testLayout, timestamp)
 	}
@@ -1166,12 +1250,12 @@ func TestEntryRecordInOrderIncrementsNewestBucket(t *testing.T) {
 		e.insert(testLayout, 3)
 	}
 
-	requireEntryInvariants(t, e)
+	requireEntryInvariants(t, testLayout, e)
 	if got, want := len(e.buckets), 3; got != want {
 		t.Fatalf("buckets after repeats = %d, want %d (repeats must not grow the slice)", got, want)
 	}
-	if want := []int64{1, 2, 3, 3, 3, 3}; !slices.Equal(e.expanded(), want) {
-		t.Fatalf("events = %v, want %v", e.expanded(), want)
+	if want := []int64{1, 2, 3, 3, 3, 3}; !slices.Equal(e.expanded(testLayout), want) {
+		t.Fatalf("events = %v, want %v", e.expanded(testLayout), want)
 	}
 	if &e.buckets[0] != backingArray {
 		t.Fatal("repeat of the newest bucket moved earlier buckets, want an in-place increment")
@@ -1179,7 +1263,7 @@ func TestEntryRecordInOrderIncrementsNewestBucket(t *testing.T) {
 
 	e.insert(testLayout, 4)
 
-	requireEntryInvariants(t, e)
+	requireEntryInvariants(t, testLayout, e)
 	if got, want := len(e.buckets), 4; got != want {
 		t.Fatalf("buckets after a new timestamp = %d, want %d", got, want)
 	}
@@ -1193,26 +1277,26 @@ func TestEntryRecordInOrderIncrementsNewestBucket(t *testing.T) {
 // increment, so jittered timestamps on a hot key cannot degrade into a memmove
 // per event.
 func TestEntryRecordOutOfOrderIncrementsExistingBucket(t *testing.T) {
-	e := &entry{}
+	e := &entry[uint32]{}
 	for _, timestamp := range []int64{10, 20, 30} {
 		e.insert(testLayout, timestamp)
 	}
 
 	e.insert(testLayout, 20)
 
-	requireEntryInvariants(t, e)
+	requireEntryInvariants(t, testLayout, e)
 	if got, want := len(e.buckets), 3; got != want {
 		t.Fatalf("buckets after repeating an older one = %d, want %d", got, want)
 	}
-	if got, want := testLayout.count(e.buckets[1]), 2; got != want {
+	if got, want := testLayout.count(int64(e.buckets[1])), 2; got != want {
 		t.Fatalf("count of the repeated bucket = %d, want %d", got, want)
 	}
 
 	e.insert(testLayout, 15)
 
-	requireEntryInvariants(t, e)
-	if want := []int64{10, 15, 20, 20, 30}; !slices.Equal(e.expanded(), want) {
-		t.Fatalf("events = %v, want %v", e.expanded(), want)
+	requireEntryInvariants(t, testLayout, e)
+	if want := []int64{10, 15, 20, 20, 30}; !slices.Equal(e.expanded(testLayout), want) {
+		t.Fatalf("events = %v, want %v", e.expanded(testLayout), want)
 	}
 }
 
@@ -1226,8 +1310,8 @@ func TestEntryPruneBranches(t *testing.T) {
 
 		e.prune(testLayout, 5)
 
-		requireEntryInvariants(t, e)
-		if got, want := e.expanded(), []int64{10, 20, 30}; !slices.Equal(got, want) {
+		requireEntryInvariants(t, testLayout, e)
+		if got, want := e.expanded(testLayout), []int64{10, 20, 30}; !slices.Equal(got, want) {
 			t.Fatalf("events = %v, want %v", got, want)
 		}
 		if &e.buckets[0] != backingArray || cap(e.buckets) != capBefore {
@@ -1241,7 +1325,7 @@ func TestEntryPruneBranches(t *testing.T) {
 
 		e.prune(testLayout, 30)
 
-		requireEntryInvariants(t, e)
+		requireEntryInvariants(t, testLayout, e)
 		if len(e.buckets) != 0 {
 			t.Fatalf("buckets = %v, want empty", e.buckets)
 		}
@@ -1258,7 +1342,7 @@ func TestEntryPruneBranches(t *testing.T) {
 
 		e.prune(testLayout, 30)
 
-		requireEntryInvariants(t, e)
+		requireEntryInvariants(t, testLayout, e)
 		if e.buckets != nil {
 			t.Fatalf("buckets = %v, want nil so the large array is collected", e.buckets)
 		}
@@ -1274,8 +1358,8 @@ func TestEntryPruneBranches(t *testing.T) {
 
 		e.prune(testLayout, expired-1)
 
-		requireEntryInvariants(t, e)
-		if got, want := e.expanded(), sequence(expired, survivors); !slices.Equal(got, want) {
+		requireEntryInvariants(t, testLayout, e)
+		if got, want := e.expanded(testLayout), sequence(expired, survivors); !slices.Equal(got, want) {
 			t.Fatalf("events = %v, want %v", got, want)
 		}
 		if &e.buckets[0] != backingArray {
@@ -1294,8 +1378,8 @@ func TestEntryPruneBranches(t *testing.T) {
 
 		e.prune(testLayout, expired-1)
 
-		requireEntryInvariants(t, e)
-		if got, want := e.expanded(), sequence(expired, survivors); !slices.Equal(got, want) {
+		requireEntryInvariants(t, testLayout, e)
+		if got, want := e.expanded(testLayout), sequence(expired, survivors); !slices.Equal(got, want) {
 			t.Fatalf("events = %v, want %v", got, want)
 		}
 		if &e.retained()[0] != firstSurvivor {
@@ -1307,7 +1391,7 @@ func TestEntryPruneBranches(t *testing.T) {
 	})
 
 	t.Run("survivors much smaller than the array are right-sized", func(t *testing.T) {
-		e := &entry{}
+		e := &entry[uint32]{}
 		for i := range int64(200) {
 			e.insert(testLayout, i)
 		}
@@ -1315,8 +1399,8 @@ func TestEntryPruneBranches(t *testing.T) {
 
 		e.prune(testLayout, 196)
 
-		requireEntryInvariants(t, e)
-		if got, want := e.expanded(), []int64{197, 198, 199}; !slices.Equal(got, want) {
+		requireEntryInvariants(t, testLayout, e)
+		if got, want := e.expanded(testLayout), []int64{197, 198, 199}; !slices.Equal(got, want) {
 			t.Fatalf("events = %v, want %v", got, want)
 		}
 		if cap(e.buckets) >= capBefore {
@@ -1374,8 +1458,14 @@ func TestGetOnFullyExpiredEntryWithoutStore(t *testing.T) {
 // saturate the search at either end of the representable range.
 // The narrowest layout makes the hot buckets spill, so an oldest bucket that
 // spans two words expires in one step, which the one-word check after the
-// oldest must not mistake for a single expired bucket.
+// oldest must not mistake for a single expired bucket. It runs at both word
+// widths, on entries whose base sits anywhere in the range, both ends included.
 func TestPruneAndLiveCountMatchDefinitionAtEveryCutoff(t *testing.T) {
+	t.Run("4-byte words", testPruneAndLiveCountMatchDefinition[uint32])
+	t.Run("8-byte words", testPruneAndLiveCountMatchDefinition[uint64])
+}
+
+func testPruneAndLiveCountMatchDefinition[W word](t *testing.T) {
 	const (
 		trials     = 100
 		timestamps = 64
@@ -1383,24 +1473,30 @@ func TestPruneAndLiveCountMatchDefinitionAtEveryCutoff(t *testing.T) {
 	)
 	layout := newBucketLayout(minCountBits)
 	rng := rand.New(rand.NewPCG(1, 2))
+	bases := []int64{0, layout.minTimestamp, layout.maxTimestamp - timestamps}
 
 	for trial := range trials {
-		e := &entry{}
+		base := bases[trial%len(bases)]
+		e := &entry[W]{base: base}
 		for range rng.IntN(4 * layout.maxCount) {
 			span := int64(timestamps)
 			if rng.IntN(2) == 0 {
 				span = hotBuckets
 			}
-			e.insert(layout, rng.Int64N(span))
+			e.insert(layout, base+rng.Int64N(span))
 		}
 
-		for _, cutoff := range append(sequence(-1, timestamps+2), math.MinInt64, layout.maxTimestamp) {
+		cutoffs := []int64{math.MinInt64, layout.maxTimestamp}
+		for _, offset := range sequence(-1, timestamps+2) {
+			cutoffs = append(cutoffs, base+offset)
+		}
+		for _, cutoff := range cutoffs {
 			want := eventsNewerThan(layout, e, cutoff)
 			if got := e.liveCount(layout, cutoff); got != want {
 				t.Fatalf("trial %d: liveCount(%d) = %d, want %d", trial, cutoff, got, want)
 			}
 
-			pruned := &entry{buckets: slices.Clone(e.buckets), total: e.total, head: e.head}
+			pruned := e.clone()
 			pruned.prune(layout, cutoff)
 			if pruned.total != want || eventsNewerThan(layout, pruned, cutoff) != want {
 				t.Fatalf("trial %d: prune(%d) kept total %d and %d live events, want %d of both",
@@ -1413,11 +1509,16 @@ func TestPruneAndLiveCountMatchDefinitionAtEveryCutoff(t *testing.T) {
 	}
 }
 
-func eventsNewerThan(l bucketLayout, e *entry, cutoff int64) int {
+// clone returns a copy of the entry that shares nothing with it.
+func (e *entry[W]) clone() *entry[W] {
+	return &entry[W]{buckets: slices.Clone(e.buckets), total: e.total, head: e.head, base: e.base}
+}
+
+func eventsNewerThan[W word](l bucketLayout, e *entry[W], cutoff int64) int {
 	events := 0
 	for _, b := range e.retained() {
-		if l.timestamp(b) > cutoff {
-			events += l.count(b)
+		if e.timestamp(l, b) > cutoff {
+			events += l.count(int64(b))
 		}
 	}
 	return events
@@ -1427,24 +1528,34 @@ func eventsNewerThan(l bucketLayout, e *entry, cutoff int64) int {
 // definition on the shapes that steer them differently: dense seconds with a
 // few skipped (the guess is the answer or a few words off), spilled seconds (it
 // lands inside a run of words of the answer's timestamp), sparse and clustered
-// timestamps (the entry is not evenly spread and is bisected), a pruned prefix
-// before head, and timestamps at both ends of the representable range. On
-// every entry:
+// timestamps (the entry is not evenly spread and is bisected), a few seconds
+// of uneven counts (the guess measures the span from the oldest word's
+// timestamp, not from its count), a pruned prefix before head, and timestamps
+// at both ends of the range a word reaches from its base, which for 8-byte
+// words is half the representable range. On every entry, at both word widths:
 //
 //   - firstAlive, at every cutoff around every retained timestamp and at the
 //     saturating ones, is the index of the first word newer than the cutoff;
-//   - recordOutOfOrder, at every target after the oldest retained timestamp and
-//     before the newest, counts exactly one more event at the target and
-//     leaves the entry sorted, with a repeated timestamp only after a full word
-//     and a matching total.
+//   - recordOutOfOrder, at every target from just below the oldest retained
+//     timestamp to just below the newest, counts exactly one more event at the
+//     target and leaves the entry sorted, with a repeated timestamp only after a
+//     full word and a matching total.
+//
+// The 8-byte words run fewer trials: they are the same code, and each trial
+// costs a copy of the entry per target, which the race detector makes slow.
 func TestSearchMatchesDefinitionOnEveryShape(t *testing.T) {
+	t.Run("4-byte words", func(t *testing.T) { testSearchMatchesDefinition[uint32](t, 100) })
+	t.Run("8-byte words", func(t *testing.T) { testSearchMatchesDefinition[uint64](t, 40) })
+}
+
+func testSearchMatchesDefinition[W word](t *testing.T, trials int) {
 	rng := rand.New(rand.NewPCG(8, 16))
 	for _, layout := range []bucketLayout{newBucketLayout(minCountBits), testLayout} {
-		for trial := range 200 {
-			e := randomSearchEntry(rng, layout, trial)
+		for trial := range trials {
+			e := randomSearchEntry[W](rng, layout, trial)
 			describe := func() string {
-				return fmt.Sprintf("countBits %d, trial %d (%d words from head %d)",
-					layout.countBits, trial, len(e.buckets)-e.head, e.head)
+				return fmt.Sprintf("countBits %d, trial %d (%d words from head %d, base %d)",
+					layout.countBits, trial, len(e.buckets)-e.head, e.head, e.base)
 			}
 			for _, cutoff := range searchCutoffs(layout, e) {
 				if got, want := e.firstAlive(layout, cutoff), firstIndexAfter(layout, e, cutoff); got != want {
@@ -1458,98 +1569,131 @@ func TestSearchMatchesDefinitionOnEveryShape(t *testing.T) {
 	}
 }
 
+// searchShapes is how many shapes randomSearchEntry draws from.
+const searchShapes = 6
+
 // randomSearchEntry builds an entry of one of the shapes the search test
 // covers, chosen by trial, with a random number of pruned words before head.
 // The events are recorded in timestamp order, so building the entry never runs
-// the search under test.
-func randomSearchEntry(rng *rand.Rand, l bucketLayout, trial int) *entry {
-	var timestamps []int64
-	start, length := rng.Int64N(1<<20), rng.IntN(600)
-	switch trial % 5 {
+// the search under test. The shapes are drawn as offsets from a random base,
+// within what a word reaches from it, so for 4-byte words the low bits of the
+// timestamps wrap wherever the base puts the wrap.
+func randomSearchEntry[W word](rng *rand.Rand, l bucketLayout, trial int) *entry[W] {
+	full := reachOf[W](l)
+	reach := min(full, 1<<31)
+	length := rng.IntN(int(min(600, reach/4)))
+	start := rng.Int64N(reach / 2)
+	var offsets []int64
+	switch trial % searchShapes {
 	case 0: // dense: one or more events every second, a few seconds skipped
 		for second := range int64(length) {
 			if rng.IntN(50) == 0 {
 				continue
 			}
 			for range 1 + rng.IntN(3) {
-				timestamps = append(timestamps, start+second)
+				offsets = append(offsets, start+second)
 			}
 		}
 	case 1: // spilled: hot seconds fill several words
 		for second := range int64(length / 8) {
 			for range 1 + rng.IntN(4*min(l.maxCount, 255)) {
-				timestamps = append(timestamps, start+second)
+				offsets = append(offsets, start+second)
 			}
 		}
 	case 2: // sparse: random gaps
+		span := min(int64(1+10*length), reach/2)
 		for range length {
-			timestamps = append(timestamps, start+rng.Int64N(int64(1+10*length)))
+			offsets = append(offsets, start+rng.Int64N(span))
 		}
 	case 3: // clustered: a few dense runs far apart
 		for range 1 + rng.IntN(4) {
-			from := start + rng.Int64N(1<<30)
+			from := rng.Int64N(reach - int64(length))
 			for second := range int64(1 + rng.IntN(1+length/2)) {
-				timestamps = append(timestamps, from+second)
+				offsets = append(offsets, from+second)
 			}
 		}
-	default: // anywhere in the representable range, both ends included
+	case 5: // a few consecutive seconds of uneven counts, spilled or not
+		for second := range int64(2 + rng.IntN(4)) {
+			for range 1 + rng.IntN(2*min(l.maxCount, 255)) {
+				offsets = append(offsets, start+second)
+			}
+		}
+	default: // both ends of the word's reach from the base, and anywhere between
 		for range 1 + rng.IntN(8) {
-			timestamps = append(timestamps, l.minTimestamp+rng.Int64N(4), l.maxTimestamp-rng.Int64N(4))
+			offsets = append(offsets, rng.Int64N(4), full-rng.Int64N(4))
 		}
 		for range length {
-			timestamps = append(timestamps, l.minTimestamp+rng.Int64N(l.maxTimestamp-l.minTimestamp))
+			offsets = append(offsets, rng.Int64N(full))
 		}
 	}
-	slices.Sort(timestamps)
-	e := &entry{}
-	for _, timestamp := range timestamps {
-		e.recordInOrder(l, timestamp)
+	slices.Sort(offsets)
+	e := &entry[W]{base: randomBase(rng, l, full, trial)}
+	for _, offset := range offsets {
+		e.recordInOrder(l, e.base+offset)
 	}
 	return withPrunedPrefix(rng, l, e)
 }
 
+// randomBase is a base from which a whole word's reach stays representable:
+// the lowest and the highest such base in turn for the shape that spans the
+// reach, so its words hit both ends of the range, and a random one otherwise.
+// A word of 8 bytes reaches half the range, the lower half from the lowest.
+func randomBase(rng *rand.Rand, l bucketLayout, reach int64, trial int) int64 {
+	highest := l.maxTimestamp - reach
+	switch {
+	case trial%searchShapes != 4:
+		return l.minTimestamp + rng.Int64N(highest-l.minTimestamp+1)
+	case trial%2 == 0:
+		return l.minTimestamp
+	}
+	return highest
+}
+
 // withPrunedPrefix puts a random number of words before the entry's buckets,
-// older than all of them, and moves head past them, as prune leaves a long run.
-func withPrunedPrefix(rng *rand.Rand, l bucketLayout, e *entry) *entry {
+// older than all of them and no older than its base, and moves head past them,
+// as prune leaves a long run.
+func withPrunedPrefix[W word](rng *rand.Rand, l bucketLayout, e *entry[W]) *entry[W] {
 	if len(e.buckets) == 0 {
 		return e
 	}
 	prefix := rng.IntN(64)
-	oldest := l.timestamp(e.buckets[0])
-	if oldest-int64(prefix) < l.minTimestamp {
+	oldest := e.timestamp(l, e.buckets[0])
+	if oldest-int64(prefix) < e.base {
 		return e
 	}
-	buckets := make([]bucket, 0, prefix+len(e.buckets))
+	buckets := make([]W, 0, prefix+len(e.buckets))
 	for i := range prefix {
-		buckets = append(buckets, l.newBucket(oldest-int64(prefix-i), 1))
+		buckets = append(buckets, W(l.newWord(oldest-int64(prefix-i), 1)))
 	}
-	return &entry{buckets: append(buckets, e.buckets...), total: e.total, head: prefix}
+	return &entry[W]{buckets: append(buckets, e.buckets...), total: e.total, head: prefix, base: e.base}
 }
 
 // searchCutoffs is every cutoff around every retained timestamp, and the ones
 // that saturate at both ends of the range.
-func searchCutoffs(l bucketLayout, e *entry) []int64 {
+func searchCutoffs[W word](l bucketLayout, e *entry[W]) []int64 {
 	cutoffs := []int64{math.MinInt64, l.minTimestamp - 1, l.minTimestamp, l.maxTimestamp, math.MaxInt64}
 	for _, b := range e.retained() {
-		timestamp := l.timestamp(b)
+		timestamp := e.timestamp(l, b)
 		cutoffs = append(cutoffs, timestamp-1, timestamp, timestamp+1)
 	}
 	return cutoffs
 }
 
 // interiorTargets is every target around every retained timestamp that lies
-// after the oldest retained timestamp and before the newest: the events
-// recordOutOfOrder is given, older than the newest bucket, for which it has to
-// search.
-func interiorTargets(l bucketLayout, e *entry) []int64 {
+// before the newest retained timestamp, from just below the oldest on, and
+// within reach of the base: the events recordOutOfOrder is given, older than
+// the newest bucket. The ones after the oldest need a search; the oldest itself
+// and the one below it are settled from the oldest word.
+func interiorTargets[W word](l bucketLayout, e *entry[W]) []int64 {
 	if len(e.retained()) == 0 {
 		return nil
 	}
-	oldest, newest := l.timestamp(e.buckets[e.head]), l.timestamp(e.buckets[len(e.buckets)-1])
+	oldest, newest := e.timestamp(l, e.buckets[e.head]), e.timestamp(l, e.buckets[len(e.buckets)-1])
 	var targets []int64
 	for _, b := range e.retained() {
-		for _, target := range []int64{l.timestamp(b) - 1, l.timestamp(b), l.timestamp(b) + 1} {
-			if target > oldest && target < newest {
+		timestamp := e.timestamp(l, b)
+		for _, target := range []int64{timestamp - 1, timestamp, timestamp + 1} {
+			if target >= max(oldest-1, e.base) && target < newest {
 				targets = append(targets, target)
 			}
 		}
@@ -1559,9 +1703,9 @@ func interiorTargets(l bucketLayout, e *entry) []int64 {
 
 // firstIndexAfter is the definition firstAlive answers: the first retained word
 // whose timestamp is after cutoff, or len when there is none.
-func firstIndexAfter(l bucketLayout, e *entry, cutoff int64) int {
+func firstIndexAfter[W word](l bucketLayout, e *entry[W], cutoff int64) int {
 	for i := e.head; i < len(e.buckets); i++ {
-		if l.timestamp(e.buckets[i]) > cutoff {
+		if e.timestamp(l, e.buckets[i]) > cutoff {
 			return i
 		}
 	}
@@ -1574,9 +1718,11 @@ func firstIndexAfter(l bucketLayout, e *entry, cutoff int64) int {
 // keeps total equal to its counts. A search that stopped anywhere but at the
 // target's first word would add a word next to one with room left, or out of
 // order.
-func requireOutOfOrderRecordsOneEvent(t *testing.T, l bucketLayout, e *entry, target int64, describe func() string) {
+func requireOutOfOrderRecordsOneEvent[W word](
+	t *testing.T, l bucketLayout, e *entry[W], target int64, describe func() string,
+) {
 	t.Helper()
-	recorded := &entry{buckets: slices.Clone(e.buckets), total: e.total, head: e.head}
+	recorded := e.clone()
 	recorded.recordOutOfOrder(l, target)
 
 	if got, want := eventsAt(l, recorded, target), eventsAt(l, e, target)+1; got != want {
@@ -1586,15 +1732,15 @@ func requireOutOfOrderRecordsOneEvent(t *testing.T, l bucketLayout, e *entry, ta
 	for i, b := range recorded.retained() {
 		if i > 0 {
 			previous := recorded.retained()[i-1]
-			if l.timestamp(b) < l.timestamp(previous) ||
-				l.timestamp(b) == l.timestamp(previous) && !l.full(previous) {
+			if recorded.timestamp(l, b) < recorded.timestamp(l, previous) ||
+				recorded.timestamp(l, b) == recorded.timestamp(l, previous) && !l.full(int64(previous)) {
 				t.Fatalf("%s: recordOutOfOrder(%d) left word %d out of order", describe(), target, i)
 			}
 		}
-		if l.count(b) < 1 {
+		if l.count(int64(b)) < 1 {
 			t.Fatalf("%s: recordOutOfOrder(%d) left word %d empty", describe(), target, i)
 		}
-		sum += l.count(b)
+		sum += l.count(int64(b))
 	}
 	if recorded.total != sum || sum != e.total+1 {
 		t.Fatalf("%s: recordOutOfOrder(%d) left total %d over %d counted events, want %d",
@@ -1602,11 +1748,11 @@ func requireOutOfOrderRecordsOneEvent(t *testing.T, l bucketLayout, e *entry, ta
 	}
 }
 
-func eventsAt(l bucketLayout, e *entry, timestamp int64) int {
+func eventsAt[W word](l bucketLayout, e *entry[W], timestamp int64) int {
 	events := 0
 	for _, b := range e.retained() {
-		if l.timestamp(b) == timestamp {
-			events += l.count(b)
+		if e.timestamp(l, b) == timestamp {
+			events += l.count(int64(b))
 		}
 	}
 	return events
@@ -1667,22 +1813,32 @@ func TestStoreSameBucketBoundedMemory(t *testing.T) {
 
 // TestDenseKeySettlesInTheWindowsSizeClassWithoutAllocating pins what keeping
 // the pruned prefix buys a key that touches every second of a long window: its
-// array settles in the smallest size class that holds the window, 16 KiB for
-// 1,800 one-second buckets rather than the 20 KiB append's quarter growth would
-// pick, and from then on sliding the window costs no allocation at all, because
-// the retained buckets are compacted into the room the pruned ones left.
+// array settles in the smallest size class that holds the window, 8 KiB for
+// 1,800 one-second buckets in 4-byte words (16 KiB in 8-byte ones) rather than
+// what append's quarter growth would pick, and from then on sliding the window
+// costs no allocation at all, because the retained buckets are compacted into
+// the room the pruned ones left. The hour it slides for takes the low bits of
+// the 4-byte words through their wrap.
 func TestDenseKeySettlesInTheWindowsSizeClassWithoutAllocating(t *testing.T) {
-	const (
-		windowSeconds  = 1_800
-		windowSizeCap  = 16 << 10
-		steadyFrom     = 3 * windowSeconds
-		steadySeconds  = 2 * windowSeconds
-		eventsPerFrame = 2
-	)
-	c := newTestCache(
-		t,
-		Config{Precision: time.Second, WindowSize: windowSeconds * time.Second, EpochUnit: EpochInSeconds},
-	)
+	const windowSeconds = 1_800
+	cfg := Config{Precision: time.Second, WindowSize: windowSeconds * time.Second, EpochUnit: EpochInSeconds}
+
+	t.Run("4-byte words", func(t *testing.T) {
+		requireDenseKeySettles(t, newTestCache(t, cfg), windowSeconds, 8<<10)
+	})
+	t.Run("8-byte words", func(t *testing.T) {
+		requireDenseKeySettles(t, newTestCacheWithWords(t, cfg, wideWordBits), windowSeconds, 16<<10)
+	})
+}
+
+// requireDenseKeySettles writes a key twice every second for three windows,
+// checks from the middle of the second on that its array stays within
+// windowSizeCap, then slides it for two more windows and requires no
+// allocation.
+func requireDenseKeySettles(t *testing.T, c *Cache, windowSeconds, windowSizeCap int) {
+	t.Helper()
+	const eventsPerFrame = 2
+	steadyFrom, steadySeconds := 3*windowSeconds, 2*windowSeconds
 
 	epoch := int64(0)
 	storeSecond := func() {
@@ -1694,9 +1850,9 @@ func TestDenseKeySettlesInTheWindowsSizeClassWithoutAllocating(t *testing.T) {
 			}
 		}
 	}
-	for epoch < steadyFrom {
+	for epoch < int64(steadyFrom) {
 		storeSecond()
-		if epoch > windowSeconds+windowSeconds/2 && c.arrayBytes("dense") > windowSizeCap {
+		if epoch > int64(windowSeconds+windowSeconds/2) && c.arrayBytes("dense") > windowSizeCap {
 			t.Fatalf(
 				"at second %d the array holds %d bytes, want at most %d",
 				epoch,
@@ -1709,11 +1865,12 @@ func TestDenseKeySettlesInTheWindowsSizeClassWithoutAllocating(t *testing.T) {
 	if allocs := mallocsDuring(steadySeconds, storeSecond); allocs != 0 {
 		t.Fatalf("sliding the window for %d seconds allocated %d times, want 0", steadySeconds, allocs)
 	}
-	if got := c.arrayBytes("dense"); got > windowSizeCap {
-		t.Fatalf("after %d seconds the array holds %d bytes, want at most %d", epoch, got, windowSizeCap)
+	after, _ := c.shapeOf("dense")
+	if after.arrayBytes > windowSizeCap {
+		t.Fatalf("after %d seconds the array holds %d bytes, want at most %d", epoch, after.arrayBytes, windowSizeCap)
 	}
-	if got, want := c.bucketBreadth("dense"), windowSeconds; got != want {
-		t.Fatalf("retained buckets = %d, want %d", got, want)
+	if after.words != windowSeconds {
+		t.Fatalf("retained buckets = %d, want %d", after.words, windowSeconds)
 	}
 }
 
@@ -1810,65 +1967,65 @@ func mallocsDuring(runs int, f func()) uint64 {
 // requireEntryInvariants asserts the invariants documented on entry: buckets
 // sorted by non-decreasing timestamp, a repeated timestamp only after a full
 // bucket, every count positive, and total equal to their sum.
-func requireEntryInvariants(t *testing.T, e *entry) {
+func requireEntryInvariants[W word](t *testing.T, l bucketLayout, e *entry[W]) {
 	t.Helper()
 
 	sum := 0
 	for i, b := range e.retained() {
 		if i > 0 {
-			requireOrderedAfterPrevious(t, e.retained(), i)
+			requireOrderedAfterPrevious(t, l, e, i)
 		}
-		if testLayout.count(b) < 1 {
+		if l.count(int64(b)) < 1 {
 			t.Fatalf(
 				"bucket %d (timestamp %d) has count %d, want >= 1",
-				i, testLayout.timestamp(b), testLayout.count(b),
+				i, e.timestamp(l, b), l.count(int64(b)),
 			)
 		}
-		sum += testLayout.count(b)
+		sum += l.count(int64(b))
 	}
 	if e.total != sum {
 		t.Fatalf("total = %d, want %d (the sum of the bucket counts)", e.total, sum)
 	}
 }
 
-// requireOrderedAfterPrevious asserts that the bucket at index sits legally
-// after its predecessor: a later timestamp, or the same one when the
+// requireOrderedAfterPrevious asserts that the retained bucket at index sits
+// legally after its predecessor: a later timestamp, or the same one when the
 // predecessor is full and this bucket is its spill.
-func requireOrderedAfterPrevious(t *testing.T, buckets []bucket, index int) {
+func requireOrderedAfterPrevious[W word](t *testing.T, l bucketLayout, e *entry[W], index int) {
 	t.Helper()
 
-	current, previous := buckets[index], buckets[index-1]
-	if testLayout.timestamp(current) < testLayout.timestamp(previous) {
+	current, previous := e.retained()[index], e.retained()[index-1]
+	if e.timestamp(l, current) < e.timestamp(l, previous) {
 		t.Fatalf(
 			"bucket %d has timestamp %d, want >= %d",
-			index, testLayout.timestamp(current), testLayout.timestamp(previous),
+			index, e.timestamp(l, current), e.timestamp(l, previous),
 		)
 	}
-	if testLayout.timestamp(current) == testLayout.timestamp(previous) && !testLayout.full(previous) {
+	if e.timestamp(l, current) == e.timestamp(l, previous) && !l.full(int64(previous)) {
 		t.Fatalf(
 			"bucket %d repeats timestamp %d after a bucket holding %d events, want a repeat only after a full one",
-			index, testLayout.timestamp(current), testLayout.count(previous),
+			index, e.timestamp(l, current), l.count(int64(previous)),
 		)
 	}
 }
 
 // expanded returns the entry's events as one timestamp per event, which is the
 // representation the window semantics are defined in.
-func (e *entry) expanded() []int64 {
+func (e *entry[W]) expanded(l bucketLayout) []int64 {
 	var out []int64
 	for _, b := range e.retained() {
-		for range testLayout.count(b) {
-			out = append(out, testLayout.timestamp(b))
+		for range l.count(int64(b)) {
+			out = append(out, e.timestamp(l, b))
 		}
 	}
 	return out
 }
 
-// entryWithBuckets builds an entry whose backing array has the given capacity
-// and holds one event in each of the given timestamps, so a test can pick the
-// prune branch it wants to exercise.
-func entryWithBuckets(capacity int, timestamps ...int64) *entry {
-	e := &entry{buckets: make([]bucket, 0, capacity)}
+// entryWithBuckets builds an entry of 4-byte words, based at zero, whose backing
+// array has the given capacity and holds one event in each of the given
+// timestamps, so a test can pick the prune branch it wants to exercise.
+func entryWithBuckets(capacity int, timestamps ...int64) *entry[uint32] {
+	e := &entry[uint32]{buckets: make([]uint32, 0, capacity)}
 	for _, timestamp := range timestamps {
 		e.insert(testLayout, timestamp)
 	}
@@ -1933,28 +2090,31 @@ func TestStoreSameBucketCountsEveryEvent(t *testing.T) {
 // timestamp at once.
 func TestEntrySpillsWhenBucketIsFull(t *testing.T) {
 	t.Run("in order", func(t *testing.T) {
-		e := &entry{buckets: []bucket{testLayout.newBucket(10, testLayout.maxCount)}, total: testLayout.maxCount}
+		e := &entry[uint32]{
+			buckets: []uint32{uint32(testLayout.newWord(10, testLayout.maxCount))},
+			total:   testLayout.maxCount,
+		}
 
 		e.insert(testLayout, 10)
 
 		if got, want := len(e.buckets), 2; got != want {
 			t.Fatalf("buckets after filling one = %d, want %d", got, want)
 		}
-		if got, want := testLayout.timestamp(e.buckets[1]), int64(10); got != want {
+		if got, want := e.timestamp(testLayout, e.buckets[1]), int64(10); got != want {
 			t.Fatalf("timestamp of the spill bucket = %d, want %d", got, want)
 		}
-		if got, want := testLayout.count(e.buckets[1]), 1; got != want {
+		if got, want := testLayout.count(int64(e.buckets[1])), 1; got != want {
 			t.Fatalf("count of the spill bucket = %d, want %d", got, want)
 		}
 		if got, want := e.total, testLayout.maxCount+1; got != want {
 			t.Fatalf("total = %d, want %d", got, want)
 		}
-		requireEntryInvariants(t, e)
+		requireEntryInvariants(t, testLayout, e)
 	})
 
 	t.Run("out of order", func(t *testing.T) {
-		e := &entry{
-			buckets: []bucket{testLayout.newBucket(10, testLayout.maxCount), testLayout.newBucket(20, 1)},
+		e := &entry[uint32]{
+			buckets: []uint32{uint32(testLayout.newWord(10, testLayout.maxCount)), uint32(testLayout.newWord(20, 1))},
 			total:   testLayout.maxCount + 1,
 		}
 
@@ -1963,13 +2123,13 @@ func TestEntrySpillsWhenBucketIsFull(t *testing.T) {
 		if got, want := len(e.buckets), 3; got != want {
 			t.Fatalf("buckets after spilling an older one = %d, want %d", got, want)
 		}
-		if got, want := testLayout.timestamp(e.buckets[1]), int64(10); got != want {
+		if got, want := e.timestamp(testLayout, e.buckets[1]), int64(10); got != want {
 			t.Fatalf("timestamp at index 1 = %d, want %d (the spill belongs beside its bucket)", got, want)
 		}
-		if got, want := testLayout.timestamp(e.buckets[2]), int64(20); got != want {
+		if got, want := e.timestamp(testLayout, e.buckets[2]), int64(20); got != want {
 			t.Fatalf("timestamp at index 2 = %d, want %d", got, want)
 		}
-		requireEntryInvariants(t, e)
+		requireEntryInvariants(t, testLayout, e)
 
 		if got, want := e.liveCount(testLayout, 9), testLayout.maxCount+2; got != want {
 			t.Fatalf("liveCount(9) = %d, want %d", got, want)
@@ -1986,7 +2146,7 @@ func TestEntrySpillsWhenBucketIsFull(t *testing.T) {
 		if got, want := e.total, 1; got != want {
 			t.Fatalf("total after pruning at 10 = %d, want %d", got, want)
 		}
-		requireEntryInvariants(t, e)
+		requireEntryInvariants(t, testLayout, e)
 	})
 }
 
@@ -2239,7 +2399,7 @@ func TestStatsCountsEveryPathExactlyOnce(t *testing.T) {
 			name:  "store rejected as late under the lock",
 			setup: advanceHighWater,
 			op: func(c *Cache) int {
-				return c.shardFor("k").store("k", staleEpoch, &c.highWater, c.windowSize)
+				return c.storeInShard("k", staleEpoch)
 			},
 			wantResult: LateEvent,
 			wantDelta:  Stats{Late: 1},
@@ -2450,16 +2610,21 @@ func TestStatsKeysTracksLiveKeysAndDropsAfterSweep(t *testing.T) {
 // objects, so a shard's base address may sit anywhere on a line and only the
 // separation can be guaranteed.
 func TestShardRejectsCannotShareACacheLineWithTheLock(t *testing.T) {
-	if got := unsafe.Offsetof(shard{}.rejects); got != 0 {
+	t.Run("4-byte words", requireRejectsApartFromTheLock[uint32])
+	t.Run("8-byte words", requireRejectsApartFromTheLock[uint64])
+}
+
+func requireRejectsApartFromTheLock[W word](t *testing.T) {
+	if got := unsafe.Offsetof(shard[W]{}.rejects); got != 0 {
 		t.Fatalf("rejects sits at offset %d, want 0 so the pad separates it from every later field", got)
 	}
 	if got := unsafe.Sizeof(shardRejects{}); got%cacheLineSize != 0 {
 		t.Fatalf("shardRejects is %d bytes, want a whole multiple of the %d-byte cache line", got, cacheLineSize)
 	}
 	for name, offset := range map[string]uintptr{
-		"mu":       unsafe.Offsetof(shard{}.mu),
-		"keys":     unsafe.Offsetof(shard{}.keys),
-		"counters": unsafe.Offsetof(shard{}.counters),
+		"mu":       unsafe.Offsetof(shard[W]{}.mu),
+		"keys":     unsafe.Offsetof(shard[W]{}.keys),
+		"counters": unsafe.Offsetof(shard[W]{}.counters),
 	} {
 		if offset < cacheLineSize {
 			t.Fatalf(

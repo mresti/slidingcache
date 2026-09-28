@@ -24,9 +24,10 @@
 // Events that share a truncated timestamp are counted individually but stored
 // once, as a bucket holding their number, so a key's memory is bounded by
 // WindowSize/Precision buckets regardless of its event rate. A bucket is a
-// single 8-byte word packing the timestamp and the count; how the word splits
-// between the two, and therefore the range of epochs the cache accepts, follows
-// from Config.CountBits.
+// single word packing the timestamp and the count: 4 bytes when the window is
+// short enough for Config.CountBits (up to 4,096 seconds with the default), 8
+// bytes otherwise. How the word splits between the two, and therefore the range
+// of epochs the cache accepts, follows from Config.CountBits.
 //
 // # Out-of-order and late events
 //
@@ -197,19 +198,26 @@ type Config struct {
 	Clock func() int64
 	// CountBits is the width, in bits, of the per-event count packed into a
 	// bucket word; the remaining 63-CountBits bits hold the bucket timestamp in
-	// seconds. Zero selects the default of 20. Any other value must be between 8
-	// and 24.
+	// seconds, of which a 4-byte word keeps the low 32-CountBits (see below).
+	// Zero selects the default of 20. Any other value must be between 8 and 24.
 	//
 	// The choice trades events per bucket against the range of epochs the cache
-	// accepts:
+	// accepts, and against the windows whose buckets fit 4-byte words:
 	//
-	//	CountBits | events per bucket before spill | timestamp bits | Unix-seconds epochs usable until
-	//	----------+-------------------------------+----------------+---------------------------------
-	//	8         | 255                           | 55             | year ~1.1e9
-	//	12        | 4,095                         | 51             | year ~7.1e7
-	//	16        | 65,535                        | 47             | year ~4.5e6
-	//	20 (dflt) | 1,048,575                     | 43             | year 280,707
-	//	24        | 16,777,215                    | 39             | year 19,391
+	//	CountBits | events per bucket before spill | timestamp bits | Unix-seconds epochs usable until | 4-byte words up to a WindowSize of
+	//	----------+-------------------------------+----------------+---------------------------------+-----------------------------------
+	//	8         | 255                           | 55             | year ~1.1e9                     | 16,777,216 s (194 days)
+	//	12        | 4,095                         | 51             | year ~7.1e7                     | 1,048,576 s (12.1 days)
+	//	16        | 65,535                        | 47             | year ~4.5e6                     | 65,536 s (18.2 hours)
+	//	20 (dflt) | 1,048,575                     | 43             | year 280,707                    | 4,096 s (68 minutes)
+	//	24        | 16,777,215                    | 39             | year 19,391                     | 256 s
+	//
+	// A key's buckets never span more than the window, so a word needs bits for
+	// the window, not for the epoch: a 4-byte word keeps the timestamp modulo
+	// 2^(32-CountBits) seconds and the key keeps the rest once, for all of its
+	// words. A Cache whose WindowSize spans at most that stores every bucket in 4
+	// bytes, and any other in 8. The limit is in seconds whatever the Precision.
+	// Neither width changes what Store and Get return.
 	//
 	// The range is expressed in seconds of bucket timestamp whatever the
 	// EpochUnit, and it is symmetric around the epoch: a cache accepts bucket
@@ -225,8 +233,8 @@ type Config struct {
 	// needs while the spills bought are real: a bucket that outgrows its count
 	// continues into further words with the same timestamp, which is correct but
 	// costs memory. A key taking 20,000 events per bucket needs 79 words per
-	// bucket at CountBits=8, about 185 KB over a 300-bucket window, against 2.3 KB
-	// at 16 or 20.
+	// bucket at CountBits=8, about 93 KB of 4-byte words over a 300-bucket
+	// window, against 1.2 KB at 16 or 20.
 	CountBits int
 }
 
@@ -296,6 +304,19 @@ func (c Config) countBits() int {
 	return c.CountBits
 }
 
+// wordBits is the width of the words New gives the cache's buckets: 4 bytes
+// when the window spans at most the 2^(32-CountBits) seconds the low bits of a
+// timestamp tell apart beside a count of CountBits bits, 8 bytes otherwise. At
+// the default CountBits that is any WindowSize up to 4,096 seconds, whatever
+// the Precision: the span counts seconds, since counting buckets would cost a
+// division on every Store.
+func (c Config) wordBits() int {
+	if c.WindowSize/time.Second <= 1<<(narrowWordBits-c.countBits()) {
+		return narrowWordBits
+	}
+	return wideWordBits
+}
+
 func (c Config) shardCount() int {
 	if c.Shards <= 0 {
 		return defaultShards
@@ -356,8 +377,16 @@ type Cache struct {
 	maxFutureSkew int64
 	clock         func() int64
 
-	layout    bucketLayout
-	shards    []*shard
+	layout bucketLayout
+	// narrowShards and wideShards are the shards of a Cache whose buckets are
+	// 4-byte and 8-byte words respectively. New sets exactly one of them, as
+	// Config.wordBits decides, so an operation takes the same branch every time
+	// and every entry below it is compiled for its width.
+	narrowShards []*shard[uint32]
+	wideShards   []*shard[uint64]
+	// rejects points at the rejection counters of each shard, in shard order,
+	// so the rejection paths reach them without a branch on the word width.
+	rejects   []*shardRejects
 	shardMask uint64
 
 	highWater atomic.Int64
@@ -402,8 +431,15 @@ func New(cfg Config, opts ...Option) (*Cache, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
+	return newCache(cfg, cfg.wordBits(), opts)
+}
+
+// newCache builds a Cache from a validated cfg whose buckets are words of
+// wordBits bits: cfg.wordBits(), or wideWordBits, which holds any window.
+func newCache(cfg Config, wordBits int, opts []Option) (*Cache, error) {
 	shardCount := roundUpPow2(cfg.shardCount())
 	layout := newBucketLayout(cfg.countBits())
+	windowBuckets := int(cfg.WindowSize / cfg.Precision)
 	c := &Cache{
 		precision:  int64(cfg.Precision / time.Second),
 		windowSize: int64(cfg.WindowSize / time.Second),
@@ -414,10 +450,16 @@ func New(cfg Config, opts ...Option) (*Cache, error) {
 		clock:         cfg.futureClock(),
 
 		layout:     layout,
-		shards:     newShards(shardCount, layout, int(cfg.WindowSize/cfg.Precision)),
 		shardMask:  shardMaskOf(shardCount),
 		sweepEvery: cfg.sweepInterval(),
 		done:       make(chan struct{}),
+	}
+	if wordBits == narrowWordBits {
+		c.narrowShards = newShards[uint32](shardCount, layout, windowBuckets)
+		c.rejects = rejectsOf(c.narrowShards)
+	} else {
+		c.wideShards = newShards[uint64](shardCount, layout, windowBuckets)
+		c.rejects = rejectsOf(c.wideShards)
 	}
 	c.highWater.Store(noObservedHighWater(c.windowSize))
 	if err := applyOptions(c, opts); err != nil {
@@ -474,7 +516,7 @@ func noObservedHighWater(windowSize int64) int64 {
 func (c *Cache) Store(epoch int64, keyInHash string) int {
 	timestamp := c.bucket(epoch)
 	if !c.layout.inRange(timestamp) {
-		c.shardFor(keyInHash).rejects.outOfRange.Add(1)
+		c.rejectsFor(keyInHash).outOfRange.Add(1)
 		return LateEvent
 	}
 	// Only an event beyond the mark can advance it, so the future guard, and
@@ -482,18 +524,22 @@ func (c *Cache) Store(epoch int64, keyInHash string) int {
 	highWater := c.highWater.Load()
 	if timestamp > highWater {
 		if c.maxFutureSkew > 0 && c.isFuture(timestamp) {
-			c.shardFor(keyInHash).rejects.future.Add(1)
+			c.rejectsFor(keyInHash).future.Add(1)
 			return FutureEvent
 		}
 		highWater = c.advanceHighWater(timestamp, highWater)
 	}
 	if timestamp <= cutoffFor(highWater, c.windowSize) {
-		c.shardFor(keyInHash).rejects.late.Add(1)
+		c.rejectsFor(keyInHash).late.Add(1)
 		return LateEvent
 	}
 	// The pre-lock check above is only a fast reject; the shard re-derives the
 	// cutoff under its lock, where it cannot be stale.
-	return c.shardFor(keyInHash).store(keyInHash, timestamp, &c.highWater, c.windowSize)
+	i := c.shardIndex(keyInHash)
+	if c.narrowShards != nil {
+		return c.narrowShards[i].store(keyInHash, timestamp, &c.highWater, c.windowSize)
+	}
+	return c.wideShards[i].store(keyInHash, timestamp, &c.highWater, c.windowSize)
 }
 
 // Get returns the live count for keyInHash within the sliding window covering
@@ -505,20 +551,24 @@ func (c *Cache) Store(epoch int64, keyInHash string) int {
 func (c *Cache) Get(epoch int64, keyInHash string) int {
 	timestamp := c.bucket(epoch)
 	if !c.layout.inRange(timestamp) {
-		c.shardFor(keyInHash).rejects.getLate.Add(1)
+		c.rejectsFor(keyInHash).getLate.Add(1)
 		return LateEvent
 	}
 	highWater := c.highWater.Load()
 	if timestamp > highWater && c.maxFutureSkew > 0 && c.isFuture(timestamp) {
-		c.shardFor(keyInHash).rejects.getFuture.Add(1)
+		c.rejectsFor(keyInHash).getFuture.Add(1)
 		return FutureEvent
 	}
 	cutoff := cutoffFor(highWater, c.windowSize)
 	if timestamp <= cutoff {
-		c.shardFor(keyInHash).rejects.getLate.Add(1)
+		c.rejectsFor(keyInHash).getLate.Add(1)
 		return LateEvent
 	}
-	return c.shardFor(keyInHash).count(keyInHash, cutoff)
+	i := c.shardIndex(keyInHash)
+	if c.narrowShards != nil {
+		return c.narrowShards[i].count(keyInHash, cutoff)
+	}
+	return c.wideShards[i].count(keyInHash, cutoff)
 }
 
 // HighWater reports the high-water mark, in seconds of bucket timestamp, and
@@ -599,7 +649,10 @@ type Stats struct {
 // does not guarantee.
 func (c *Cache) Stats() Stats {
 	var stats Stats
-	for _, s := range c.shards {
+	for _, s := range c.narrowShards {
+		s.addTo(&stats)
+	}
+	for _, s := range c.wideShards {
 		s.addTo(&stats)
 	}
 	return stats
@@ -697,14 +750,19 @@ func (c *Cache) advanceHighWater(timestamp, current int64) int64 {
 	}
 }
 
-// shardFor selects the shard for key. The default FNV-1a path is kept as an
+// shardIndex selects the shard for key. The default FNV-1a path is kept as an
 // inlinable direct call; a custom hash is only invoked when one was installed
 // via WithHashFunc, so the common case pays no indirect-call cost.
-func (c *Cache) shardFor(key string) *shard {
+func (c *Cache) shardIndex(key string) uint64 {
 	if c.hash == nil {
-		return c.shards[fnv1a(key)&c.shardMask]
+		return fnv1a(key) & c.shardMask
 	}
-	return c.shards[c.hash(key)&c.shardMask]
+	return c.hash(key) & c.shardMask
+}
+
+// rejectsFor returns the rejection counters of the shard that owns key.
+func (c *Cache) rejectsFor(key string) *shardRejects {
+	return c.rejects[c.shardIndex(key)]
 }
 
 func (c *Cache) startJanitor() {
@@ -728,7 +786,10 @@ func (c *Cache) runJanitor() {
 
 func (c *Cache) sweep() {
 	cutoff := c.cutoff()
-	for _, s := range c.shards {
+	for _, s := range c.narrowShards {
+		s.sweep(cutoff)
+	}
+	for _, s := range c.wideShards {
 		s.sweep(cutoff)
 	}
 }

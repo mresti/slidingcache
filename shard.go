@@ -8,8 +8,9 @@ import (
 
 // shard is an independently locked partition of the key space. Keys are assigned
 // to shards by a hash of the key, so operations on different shards proceed
-// concurrently.
-type shard struct {
+// concurrently. Its entries hold their buckets in words of type W, the width New
+// picked for the Cache.
+type shard[W word] struct {
 	// rejects comes first, and is padded to a whole cache line, so the atomic
 	// writes of the rejection paths never invalidate the line holding mu and
 	// keys, which every accepted operation touches.
@@ -19,7 +20,7 @@ type shard struct {
 	// allows: the increments then dirty the line the lock has already taken.
 	mu       sync.Mutex
 	counters shardCounters
-	keys     map[string]*entry
+	keys     map[string]*entry[W]
 	peak     int // largest observed len(keys) since the last map compaction.
 	// layout is a copy of the Cache's bucket layout, held here so the hot path
 	// reads it from the shard it has already loaded. It is read-only, so it comes
@@ -62,12 +63,22 @@ type shardCounters struct {
 // a path that is never hot.
 const cacheLineSize = 64
 
-func newShards(count int, layout bucketLayout, windowBuckets int) []*shard {
-	shards := make([]*shard, count)
+func newShards[W word](count int, layout bucketLayout, windowBuckets int) []*shard[W] {
+	shards := make([]*shard[W], count)
 	for i := range shards {
-		shards[i] = &shard{layout: layout, windowBuckets: windowBuckets, keys: make(map[string]*entry)}
+		shards[i] = &shard[W]{layout: layout, windowBuckets: windowBuckets, keys: make(map[string]*entry[W])}
 	}
 	return shards
+}
+
+// rejectsOf returns a pointer to the rejection counters of each shard, in
+// shard order.
+func rejectsOf[W word](shards []*shard[W]) []*shardRejects {
+	rejects := make([]*shardRejects, len(shards))
+	for i, s := range shards {
+		rejects[i] = &s.rejects
+	}
+	return rejects
 }
 
 // store records timestamp for key and returns the resulting live count, or
@@ -79,7 +90,7 @@ func newShards(count int, layout bucketLayout, windowBuckets int) []*shard {
 // before the lock can be stale, because a concurrent Store may advance the
 // high-water mark in between and turn an apparently live timestamp into an
 // expired one.
-func (s *shard) store(key string, timestamp int64, highWater *atomic.Int64, windowSize int64) int {
+func (s *shard[W]) store(key string, timestamp int64, highWater *atomic.Int64, windowSize int64) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -93,12 +104,13 @@ func (s *shard) store(key string, timestamp int64, highWater *atomic.Int64, wind
 
 	e, ok := s.keys[key]
 	if !ok {
-		s.keys[key] = newEntry(s.layout, timestamp)
+		s.keys[key] = newEntry[W](s.layout, timestamp, cutoff)
 		s.trackPeak()
 		return 1
 	}
 
 	e.prune(s.layout, cutoff)
+	e.rebase(cutoff)
 	if e.needsRoom(s.layout, timestamp) {
 		e.makeRoom(s.windowBuckets)
 	}
@@ -115,7 +127,7 @@ func (s *shard) store(key string, timestamp int64, highWater *atomic.Int64, wind
 // count returns the key's live count without mutating the shard. Cleanup of
 // expired buckets and empty keys happens on the next Store to the key and in
 // the janitor sweep. It returns 0 for an absent key.
-func (s *shard) count(key string, cutoff int64) int {
+func (s *shard[W]) count(key string, cutoff int64) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -131,7 +143,7 @@ func (s *shard) count(key string, cutoff int64) int {
 // sweep prunes every key in the shard, deletes the keys left without a single
 // retained event, and compacts the backing map when it has shrunk substantially
 // since its peak.
-func (s *shard) sweep(cutoff int64) {
+func (s *shard[W]) sweep(cutoff int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -144,7 +156,7 @@ func (s *shard) sweep(cutoff int64) {
 	s.compactIfSparse()
 }
 
-func (s *shard) trackPeak() {
+func (s *shard[W]) trackPeak() {
 	if len(s.keys) > s.peak {
 		s.peak = len(s.keys)
 	}
@@ -154,18 +166,18 @@ func (s *shard) trackPeak() {
 // key count has fallen well below the observed peak. Go maps never shrink their
 // bucket arrays on their own, so this returns memory to the garbage collector
 // after bursts of short-lived keys.
-func (s *shard) compactIfSparse() {
+func (s *shard[W]) compactIfSparse() {
 	live := len(s.keys)
 	if s.peak <= mapCompactMinPeak || live >= s.peak/2 {
 		return
 	}
-	compacted := make(map[string]*entry, live)
+	compacted := make(map[string]*entry[W], live)
 	maps.Copy(compacted, s.keys)
 	s.keys = compacted
 	s.peak = live
 }
 
-func (s *shard) size() int {
+func (s *shard[W]) size() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.keys)
@@ -174,7 +186,7 @@ func (s *shard) size() int {
 // addTo accumulates this shard's counters into stats. The atomics and the
 // lock-guarded fields are read in one pass so a shard is visited once, and
 // len(keys) is read under the lock that already has to be taken.
-func (s *shard) addTo(stats *Stats) {
+func (s *shard[W]) addTo(stats *Stats) {
 	stats.OutOfRange += s.rejects.outOfRange.Load()
 	stats.Late += s.rejects.late.Load()
 	stats.Future += s.rejects.future.Load()

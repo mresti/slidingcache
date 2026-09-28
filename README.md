@@ -405,7 +405,7 @@ point they start counting without any change to the export above.
 | `SweepInterval` | `time.Duration` | no       | `WindowSize`       | Period of the background janitor. May be sub-second (useful in tests). Must be `>= 0`. |
 | `MaxFutureSkew` | `time.Duration` | no       | `0` (disabled)     | Furthest a bucket timestamp may lie ahead of `Clock()` before `Store` and `Get` reject it with `-2`. Must be `>= 0` and a whole multiple of `time.Second`. See [Future events and the `-2` sentinel](#future-events-and-the--2-sentinel). |
 | `Clock`         | `func() int64`  | no       | Unix wall clock    | Current epoch in `EpochUnit`. Consulted only when `MaxFutureSkew > 0`, and only by an event that would advance the high-water mark. `nil` means `time.Now().UnixNano()`/`UnixMilli()`/`Unix()` per `EpochUnit`; setting it without `MaxFutureSkew` is an error. |
-| `CountBits`     | `int`           | no       | `20`               | Width of the per-bucket event count inside a bucket word; the other `63−CountBits` bits hold the bucket timestamp in seconds. Must be `0` (the default) or between `8` and `24`. See [`CountBits` and the epoch range](#countbits-and-the-epoch-range). |
+| `CountBits`     | `int`           | no       | `20`               | Width of the per-bucket event count inside a bucket word; the other `63−CountBits` bits hold the bucket timestamp in seconds, of which a 4-byte word keeps the low `32−CountBits`. Must be `0` (the default) or between `8` and `24`. See [`CountBits` and the epoch range](#countbits-and-the-epoch-range). |
 
 `Precision` and `WindowSize` must be positive, whole-second durations: sub-second
 values (e.g. `500ms`) or non-whole-second values (e.g. `1500ms`) are rejected
@@ -420,18 +420,27 @@ untouched. See [Late events and the `-1` sentinel](#late-events-and-the--1-senti
 
 ### `CountBits` and the epoch range
 
-A bucket word is one `int64`: the low `CountBits` bits hold how many events
+A bucket word packs two numbers: the low `CountBits` bits hold how many events
 landed in the bucket, the remaining `63−CountBits` bits hold the bucket
 timestamp in seconds. `CountBits` moves that split, trading events per bucket
-against the range of epochs the cache accepts:
+against the range of epochs the cache accepts, and against the windows whose
+buckets fit in 4-byte words:
 
-| CountBits | events per bucket before spill | timestamp bits | Unix-seconds epochs usable until |
-|-----------|-------------------------------|----------------|----------------------------------|
-| 8 | 255 | 55 | year ~1.1e9 |
-| 12 | 4,095 | 51 | year ~7.1e7 |
-| 16 | 65,535 | 47 | year ~4.5e6 |
-| 20 (default) | 1,048,575 | 43 | year 280,707 |
-| 24 | 16,777,215 | 39 | year 19,391 |
+| CountBits | events per bucket before spill | timestamp bits | Unix-seconds epochs usable until | 4-byte words up to a `WindowSize` of |
+|-----------|-------------------------------|----------------|----------------------------------|--------------------------------------|
+| 8 | 255 | 55 | year ~1.1e9 | 16,777,216 s (194 days) |
+| 12 | 4,095 | 51 | year ~7.1e7 | 1,048,576 s (12.1 days) |
+| 16 | 65,535 | 47 | year ~4.5e6 | 65,536 s (18.2 hours) |
+| 20 (default) | 1,048,575 | 43 | year 280,707 | 4,096 s (68 minutes) |
+| 24 | 16,777,215 | 39 | year 19,391 | 256 s |
+
+A key's buckets never span more than the window, so a word needs bits for the
+window, not for the epoch. A cache whose `WindowSize` spans at most
+`2^(32−CountBits)` seconds stores every bucket in a 4-byte word that keeps the
+timestamp modulo that span; each key keeps the rest of it once, for all of its
+words. Any other cache stores 8-byte words that hold the whole timestamp. `New`
+picks the width; it halves a key's memory and changes nothing `Store` and `Get`
+return. The limit counts seconds whatever the `Precision`.
 
 The range is expressed in **seconds of bucket timestamp whatever the
 `EpochUnit`**, and it is symmetric around the epoch: the cache accepts bucket
@@ -448,7 +457,8 @@ Below the default, the timestamp range gained is one nobody needs, while the
 spills bought are real: a bucket that outgrows its count continues into further
 words with the same timestamp. That stays correct, but it costs memory. A key
 taking 20,000 events per bucket needs 79 words per bucket at `CountBits: 8` —
-about 185 KB over a 300-bucket window — against 2.3 KB at 16 or 20.
+about 93 KB of 4-byte words over a 300-bucket window — against 1.2 KB at 16 or
+20.
 
 ### Choosing `Shards`
 
@@ -504,10 +514,11 @@ bounded through four mechanisms:
    than `WindowSize / Precision` buckets no matter how many events per second it
    receives. Repeated events cost an increment rather than memory, and the
    entry's cached total keeps `Store` returning the live count without a scan.
-   A bucket is one 8-byte word holding both the timestamp and the count, so a
-   key that never receives more than one event per bucket costs the same memory
-   as a bare timestamp per event plus the entry's cached total, and every key
-   above that rate pays less.
+   A bucket is one word holding both the timestamp and the count — 4 bytes when
+   the window fits (see [`CountBits` and the epoch range](#countbits-and-the-epoch-range)),
+   8 otherwise — so a key that never receives more than one event per bucket
+   costs no more memory than a bare timestamp per event plus the entry's cached
+   total, and every key above that rate pays less.
 2. **Lazy pruning.** Every accepted `Store` prunes the touched key's expired
    prefix before inserting, so a hot key never accumulates dead buckets. Pruning
    never removes the key itself: an entry emptied by pruning is immediately
@@ -529,8 +540,9 @@ bounded through four mechanisms:
    its array and, once the array fills, compacts its retained buckets into that
    room instead of reallocating; when it does have to grow, it grows to its
    window plus an eighth rather than by `append`'s quarter. A key that fills a
-   window of 1,800 buckets therefore settles in a 16 KiB array instead of a
-   20 KiB one and slides it without allocating. During a sweep, if a shard's
+   window of 1,800 buckets therefore settles in an 8 KiB array of 4-byte words
+   (16 KiB of 8-byte ones) instead of a 20 KiB one and slides it without
+   allocating. During a sweep, if a shard's
    live key count has fallen well below its observed peak, the shard's map is
    rebuilt into a fresh, right-sized map to release hash-bucket memory to the
    garbage collector.
