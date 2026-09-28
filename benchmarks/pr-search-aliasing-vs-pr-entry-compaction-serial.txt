@@ -1,0 +1,108 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/mresti/slidingcache
+cpu: Apple M2
+                                            │ benchmarks/pr-entry-compaction-serial.txt │ benchmarks/pr-search-aliasing-serial.txt │
+                                            │                  sec/op                   │      sec/op        vs base               │
+StoreSingleKey                                                              20.30n ± 0%         20.38n ± 0%  +0.37% (p=0.009 n=10)
+StoreManyKeys                                                               34.83n ± 0%         34.09n ± 0%  -2.14% (p=0.000 n=10)
+GetHit                                                                      16.46n ± 0%         16.43n ± 0%  -0.21% (p=0.000 n=10)
+GetMiss                                                                     14.77n ± 0%         14.77n ± 0%       ~ (p=0.608 n=10)
+StoreSteadyState/keys=1000                                                  31.12n ± 2%         29.22n ± 1%  -6.11% (p=0.000 n=10)
+StoreSteadyState/keys=10000                                                 29.86n ± 0%         28.93n ± 0%  -3.10% (p=0.000 n=10)
+StoreSteadyState/keys=100000                                                35.07n ± 0%         34.25n ± 0%  -2.35% (p=0.000 n=10)
+StoreLateReject                                                             7.385n ± 0%         7.379n ± 0%       ~ (p=0.208 n=10)
+GetHitManyKeys                                                              28.18n ± 0%         28.16n ± 0%       ~ (p=0.208 n=10)
+StoreOutOfOrder                                                             58.56n ± 0%         57.76n ± 1%  -1.37% (p=0.000 n=10)
+Sweep/keys=10000                                                            88.07µ ± 1%         88.01µ ± 1%       ~ (p=0.436 n=10)
+Sweep/keys=100000                                                           875.3µ ± 2%         861.7µ ± 0%       ~ (p=0.105 n=10)
+MemoryFootprint                                                             62.07m ± 0%         61.99m ± 1%       ~ (p=0.393 n=10)
+StoreHotKeySameBucket                                                       17.38n ± 0%         17.48n ± 0%  +0.58% (p=0.000 n=10)
+StoreMediumCardinalitySameBucket/keys=100                                   26.35n ± 0%         26.72n ± 1%  +1.40% (p=0.003 n=10)
+StoreMediumCardinalitySameBucket/keys=1000                                  25.11n ± 2%         25.04n ± 1%       ~ (p=0.617 n=10)
+StoreMediumCardinalitySameBucket/keys=10000                                 27.66n ± 0%         27.86n ± 1%  +0.70% (p=0.000 n=10)
+StoreHotKeyNanos                                                            17.52n ± 0%         17.56n ± 0%  +0.23% (p=0.002 n=10)
+StoreFutureReject                                                           9.047n ± 0%         9.046n ± 0%       ~ (p=0.725 n=10)
+StoreAdvancingHighWater/skew=off                                            21.15n ± 0%         20.61n ± 0%  -2.55% (p=0.000 n=10)
+StoreAdvancingHighWater/skew=on                                             22.64n ± 0%         22.08n ± 0%  -2.50% (p=0.000 n=10)
+StoreSteadyStateWithSkew/keys=1000                                          34.49n ± 1%         32.76n ± 1%  -5.02% (p=0.000 n=10)
+StoreSteadyStateWithSkew/keys=10000                                         33.05n ± 0%         31.92n ± 0%  -3.42% (p=0.000 n=10)
+StoreSteadyStateWithSkew/keys=100000                                        38.57n ± 0%         37.36n ± 0%  -3.14% (p=0.000 n=10)
+GetFullWindowKeys/lagging                                                                       49.45n ± 1%
+GetFullWindowKeys/idle                                                                          46.22n ± 2%
+StoreFullWindowKeys/out-of-order                                                                108.4n ± 0%
+StoreFullWindowKeys/batched                                                                     41.17n ± 1%
+geomean                                                                     95.69n              87.76n       -1.30%
+
+                                            │ benchmarks/pr-entry-compaction-serial.txt │ benchmarks/pr-search-aliasing-serial.txt │
+                                            │                   B/op                    │      B/op        vs base                 │
+StoreSingleKey                                                             0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreManyKeys                                                              0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+GetHit                                                                     0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+GetMiss                                                                    0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyState/keys=1000                                                 0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyState/keys=10000                                                0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyState/keys=100000                                               0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreLateReject                                                            0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+GetHitManyKeys                                                             0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreOutOfOrder                                                            0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Sweep/keys=10000                                                           0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Sweep/keys=100000                                                          0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+MemoryFootprint                                                          34.89Mi ± 0%        34.89Mi ± 0%       ~ (p=0.512 n=10)
+StoreHotKeySameBucket                                                      0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=100                                  0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=1000                                 0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=10000                                0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreHotKeyNanos                                                           0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreFutureReject                                                          0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreAdvancingHighWater/skew=off                                           0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreAdvancingHighWater/skew=on                                            0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyStateWithSkew/keys=1000                                         0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyStateWithSkew/keys=10000                                        0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyStateWithSkew/keys=100000                                       0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+GetFullWindowKeys/lagging                                                                      0.000 ± 0%
+GetFullWindowKeys/idle                                                                         0.000 ± 0%
+StoreFullWindowKeys/out-of-order                                                               0.000 ± 0%
+StoreFullWindowKeys/batched                                                                    0.000 ± 0%
+geomean                                                                               ²                    +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                            │ benchmarks/pr-entry-compaction-serial.txt │ benchmarks/pr-search-aliasing-serial.txt │
+                                            │                 allocs/op                 │    allocs/op     vs base                 │
+StoreSingleKey                                                             0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreManyKeys                                                              0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+GetHit                                                                     0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+GetMiss                                                                    0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyState/keys=1000                                                 0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyState/keys=10000                                                0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyState/keys=100000                                               0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreLateReject                                                            0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+GetHitManyKeys                                                             0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreOutOfOrder                                                            0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Sweep/keys=10000                                                           0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Sweep/keys=100000                                                          0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+MemoryFootprint                                                           600.8k ± 0%         600.8k ± 0%       ~ (p=1.000 n=10) ¹
+StoreHotKeySameBucket                                                      0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=100                                  0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=1000                                 0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=10000                                0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreHotKeyNanos                                                           0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreFutureReject                                                          0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreAdvancingHighWater/skew=off                                           0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreAdvancingHighWater/skew=on                                            0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyStateWithSkew/keys=1000                                         0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyStateWithSkew/keys=10000                                        0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyStateWithSkew/keys=100000                                       0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+GetFullWindowKeys/lagging                                                                      0.000 ± 0%
+GetFullWindowKeys/idle                                                                         0.000 ± 0%
+StoreFullWindowKeys/out-of-order                                                               0.000 ± 0%
+StoreFullWindowKeys/batched                                                                    0.000 ± 0%
+geomean                                                                               ²                    +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                │ benchmarks/pr-entry-compaction-serial.txt │ benchmarks/pr-search-aliasing-serial.txt │
+                │                 bytes/key                 │      bytes/key        vs base            │
+MemoryFootprint                                  211.0 ± 0%             211.0 ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal

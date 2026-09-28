@@ -23,6 +23,9 @@ Results saved per PR so they can be compared with benchstat. The extension is
 | `pr-entry-compaction-{serial,parallel}.txt` | entry compaction (bounded growth, in-place compaction) post |
 | `pr-entry-compaction-vs-baseline-{serial,parallel}.txt` | entry compaction vs baseline v1.3.0 |
 | `pr-entry-compaction-vs-pr-fast-path-live-count-{serial,parallel}.txt` | entry compaction vs fast-path live count, the PR it is stacked on |
+| `pr-search-aliasing-{serial,parallel}.txt` | bucket search from a guess on evenly spread keys post |
+| `pr-search-aliasing-vs-baseline-{serial,parallel}.txt` | search from a guess vs baseline v1.3.0 |
+| `pr-search-aliasing-vs-pr-entry-compaction-{serial,parallel}.txt` | search from a guess vs entry compaction, the PR it is stacked on |
 
 Generate the post results plus the comparison:
 ```
@@ -86,6 +89,24 @@ the fast-path files (`StoreSteadyState`, `StoreMediumCardinalitySameBucket`,
 `StoreSteadyStateWithSkew` +1.8% to +3.0%. `ParallelStore-4`'s runs split
 between about 13 and 18 ns with the share of its stores refused as late; at an
 equal share this change costs about 2% there.
+
+The search change is stacked on entry compaction and compared with its files as
+well. It adds `BenchmarkGetFullWindowKeys` and `BenchmarkStoreFullWindowKeys`:
+10,000 keys each holding a full 30-minute window of one-second buckets, the
+16 KiB array class, read three seconds after their last write or after a whole
+idle window, and written in three-second batches or out of order. None of the
+earlier files has them, so the comparisons show them on one side only; measured
+interleaved in one session against entry compaction's code with the same
+benchmarks compiled in, they are `lagging` -50%, `idle` -57%, `out-of-order`
+-62% and `batched` -40%. The rows that never search stay within noise or get
+faster (`StoreSteadyState` -2.4% to -6.1%, `StoreSteadyStateWithSkew` -3.1% to
+-5.0%, `StoreAdvancingHighWater` -2.5%, `StoreManyKeys` -2.1%), since `prune`'s
+common path lost the inlined search; `StoreHotKeySameBucket` +0.6%,
+`StoreMediumCardinalitySameBucket/keys=100` +1.4% and `StoreSingleKey` +0.4%
+are the largest moves up. Against v1.3.0 the gate holds (`StoreManyKeys` -0.6%,
+`StoreHotKeyNanos` -17.2%, `GetHitManyKeys` -2.2%, `ParallelStore` within
+noise), allocations are unchanged and `MemoryFootprint` stays at 211
+bytes/key.
 
 The diagnostics benchmarks, `BenchmarkHighWater` and `BenchmarkStats`, are
 deliberately named outside the `Store|Get|Sweep|Memory` families (like
