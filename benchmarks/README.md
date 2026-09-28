@@ -7,6 +7,8 @@ Results saved per PR so they can be compared with benchstat. The extension is
 |---|---|
 | `baseline-v1.2.0-serial.txt` | `^Benchmark(Store|Get|Sweep|Memory)` -count=10 -cpu=1 on main (v1.2.0) |
 | `baseline-v1.2.0-parallel.txt` | `^BenchmarkParallel` -count=10 -cpu=4 on main (v1.2.0) |
+| `baseline-v1.3.0-serial.txt` | `^Benchmark(Store|Get|Sweep|Memory)` -count=10 -cpu=1 on main (v1.3.0) |
+| `baseline-v1.3.0-parallel.txt` | `^BenchmarkParallel` -count=10 -cpu=4 on main (v1.3.0) |
 | `*.benchstat.txt` | benchstat summary of a single file |
 | `<pr>-serial.txt`, `<pr>-parallel.txt` | post-change results of that PR |
 | `<pr>-vs-baseline-{serial,parallel}.txt` | `benchstat baseline <pr>` |
@@ -16,6 +18,8 @@ Results saved per PR so they can be compared with benchstat. The extension is
 | `pr-c-stats-serial.txt` | PR-C (Stats) post, serial |
 | `pr-c-stats-parallel.txt` | PR-C post, parallel |
 | `pr-c-stats-vs-baseline-{serial,parallel}.txt` | PR-C vs baseline v1.2.0 |
+| `pr-fast-path-live-count-{serial,parallel}.txt` | fast-path live count (O(1) cutoff check, scan-free idle `Get`) post |
+| `pr-fast-path-live-count-vs-baseline-{serial,parallel}.txt` | fast-path live count vs baseline v1.3.0 |
 
 Generate the post results plus the comparison:
 ```
@@ -23,6 +27,10 @@ make test-bench-save PR=pr-c-stats
 ```
 The target writes the header (go version, CPU, cores, commit, date) and then the
 two `go test -bench` runs; afterwards it runs benchstat against the baseline.
+Changes made on top of v1.3.0 compare against its baseline instead:
+```
+make test-bench-save PR=<name> BASELINE=benchmarks/baseline-v1.3.0
+```
 Gate: delta <= 3% on StoreManyKeys, StoreHotKeyNanos, GetHitManyKeys and
 ParallelStore; 0 allocs in Store/Get.
 
@@ -46,6 +54,17 @@ table:
   A first attempt that placed the lock-guarded counters after `keys` and `peak`
   put them on a second cache line and cost `ParallelGet` +25%; keeping every
   written field adjacent to `mu` removed it.
+
+The fast-path live count change is measured against `baseline-v1.3.0`. It changes
+how `prune` and `liveCount` find the first live bucket, so it shows on the rows
+where a key holds many buckets: `StoreSingleKey` -25.8%,
+`StoreAdvancingHighWater` -25.4%/-24.2%, `StoreHotKeyNanos` -16.7%,
+`StoreOutOfOrder` -14.3%, `Sweep` -10.4%/-6.9%. The gate holds (`StoreManyKeys`
+-1.3%, `GetHitManyKeys` -3.4%, `ParallelStore` within noise), allocations are
+unchanged and `MemoryFootprint` stays at 195 bytes/key; `StoreFutureReject`
++0.3% is on a path the change does not touch. Most rows keep a few buckets per
+key; on keys holding a 1,800-bucket window an in-order `Store` is about 40%
+faster and a `Get` on an idle key 95%, which the PR description measures.
 
 The diagnostics benchmarks, `BenchmarkHighWater` and `BenchmarkStats`, are
 deliberately named outside the `Store|Get|Sweep|Memory` families (like

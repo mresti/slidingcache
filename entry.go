@@ -193,20 +193,54 @@ func (e *entry) firstAlive(l bucketLayout, cutoff int64) int {
 	return e.lowerBound(l, cutoff+1)
 }
 
+// aliveFrom reports whether every bucket from index i on is still alive under
+// cutoff, which holds trivially when the entry has no bucket at i. Because
+// buckets are sorted, one word answers it: the one at i.
+//
+// The cutoff moves forward one bucket at a time, so a key stored or read at
+// least once per bucket finds at most its oldest bucket expired: nothing on
+// every call but the first of a bucket, and the oldest bucket on that one.
+// prune and liveCount therefore ask aliveFrom 0 and then 1 before they search
+// the entry, which settles almost every call from its first two words. The
+// check compares the unpacked timestamp, so it cannot overflow whatever the
+// cutoff, and it stays within the inliner's budget, which firstAlive does only
+// without these checks.
+func (e *entry) aliveFrom(l bucketLayout, i int, cutoff int64) bool {
+	return i >= len(e.buckets) || l.timestamp(e.buckets[i]) > cutoff
+}
+
 // liveCount returns how many of the entry's events are still alive without
 // mutating it.
 //
-// It subtracts the expired prefix from the cached total, so the cost is the
-// length of that prefix. The prefix is empty for any key stored or swept since
-// the cutoff last moved past its oldest bucket, which is the common case; the
-// worst case is a key that was written and then left untouched until all of its
-// buckets expired, where the scan is bounded by WindowSize/Precision buckets.
+// Because total counts the expired prefix too, the live count is both total
+// minus the prefix and the sum of the live suffix, and liveCount sums whichever
+// of the two is shorter. The prefix is empty or a single bucket for any key
+// stored or read since the cutoff last moved, which is the common case and
+// aliveFrom settles without a search. A key that was written and then left
+// untouched until all of its buckets expired has an empty suffix instead, so it
+// costs the search and no scan, where subtracting its prefix would walk
+// WindowSize/Precision buckets. The worst case is half the entry.
 func (e *entry) liveCount(l bucketLayout, cutoff int64) int {
-	live := e.total
-	for i := range e.firstAlive(l, cutoff) {
-		live -= l.count(e.buckets[i])
+	switch {
+	case e.aliveFrom(l, 0, cutoff):
+		return e.total
+	case e.aliveFrom(l, 1, cutoff):
+		return e.total - l.count(e.buckets[0])
 	}
-	return live
+	firstAlive := e.firstAlive(l, cutoff)
+	if expired, alive := firstAlive, len(e.buckets)-firstAlive; alive < expired {
+		return sumCounts(l, e.buckets[firstAlive:])
+	}
+	return e.total - sumCounts(l, e.buckets[:firstAlive])
+}
+
+// sumCounts returns the number of events held in buckets.
+func sumCounts(l bucketLayout, buckets []bucket) int {
+	sum := 0
+	for _, b := range buckets {
+		sum += l.count(b)
+	}
+	return sum
 }
 
 // lowerBound returns the index of the first bucket with a timestamp >= target,
@@ -259,13 +293,16 @@ func (e *entry) lowerBound(l bucketLayout, target int64) int {
 //     nothing per call, and the next append that outgrows the remaining capacity
 //     reclaims the array while copying only the survivors.
 func (e *entry) prune(l bucketLayout, cutoff int64) {
-	firstAlive := e.firstAlive(l, cutoff)
-	if firstAlive == 0 {
+	var firstAlive int
+	switch {
+	case e.aliveFrom(l, 0, cutoff):
 		return
+	case e.aliveFrom(l, 1, cutoff):
+		firstAlive = 1
+	default:
+		firstAlive = e.firstAlive(l, cutoff)
 	}
-	for i := range firstAlive {
-		e.total -= l.count(e.buckets[i])
-	}
+	e.total -= sumCounts(l, e.buckets[:firstAlive])
 	if firstAlive == len(e.buckets) {
 		if shouldRightSize(cap(e.buckets), 0) {
 			e.buckets = nil
