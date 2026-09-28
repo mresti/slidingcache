@@ -141,8 +141,11 @@ negative infinity, so buckets have a uniform width on both sides of zero.
 ### Out-of-order tolerance
 
 Events may arrive in any order. An event is counted into the bucket of its
-truncated timestamp, located by binary search in the key's sorted bucket list,
-so an older-but-still-live event stored after a newer one is counted normally.
+truncated timestamp, located by a search of the key's sorted bucket list, so an
+older-but-still-live event stored after a newer one is counted normally. On a key
+that holds a bucket for nearly every second it spans, such as one written every
+second at a one-second `Precision`, the search starts where the timestamp would
+sit and settles within a few words of it; other keys are searched by bisection.
 
 ### Late events and the `-1` sentinel
 
@@ -514,7 +517,9 @@ bounded through four mechanisms:
    fewer, and never mutates the cache. A key stored or read at least once per
    bucket has at most its oldest bucket expired, which both paths settle from
    the first two buckets without a search; a key left idle for a whole window
-   costs a search and no scan.
+   is settled from its newest bucket, with no search and no scan, and a key
+   idle for a few buckets is searched as described under "Out-of-order
+   tolerance".
 3. **Background sweep.** A janitor goroutine (a `time.Ticker`) periodically scans
    all shards, prunes expired buckets, and deletes keys left without events.
 4. **Right-sizing and map compaction.** When a key's bucket slice has a backing

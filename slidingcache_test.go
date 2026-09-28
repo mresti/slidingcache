@@ -1423,6 +1423,195 @@ func eventsNewerThan(l bucketLayout, e *entry, cutoff int64) int {
 	return events
 }
 
+// TestSearchMatchesDefinitionOnEveryShape pins both searches against their
+// definition on the shapes that steer them differently: dense seconds with a
+// few skipped (the guess is the answer or a few words off), spilled seconds (it
+// lands inside a run of words of the answer's timestamp), sparse and clustered
+// timestamps (the entry is not evenly spread and is bisected), a pruned prefix
+// before head, and timestamps at both ends of the representable range. On
+// every entry:
+//
+//   - firstAlive, at every cutoff around every retained timestamp and at the
+//     saturating ones, is the index of the first word newer than the cutoff;
+//   - recordOutOfOrder, at every target after the oldest retained timestamp and
+//     before the newest, counts exactly one more event at the target and
+//     leaves the entry sorted, with a repeated timestamp only after a full word
+//     and a matching total.
+func TestSearchMatchesDefinitionOnEveryShape(t *testing.T) {
+	rng := rand.New(rand.NewPCG(8, 16))
+	for _, layout := range []bucketLayout{newBucketLayout(minCountBits), testLayout} {
+		for trial := range 200 {
+			e := randomSearchEntry(rng, layout, trial)
+			describe := func() string {
+				return fmt.Sprintf("countBits %d, trial %d (%d words from head %d)",
+					layout.countBits, trial, len(e.buckets)-e.head, e.head)
+			}
+			for _, cutoff := range searchCutoffs(layout, e) {
+				if got, want := e.firstAlive(layout, cutoff), firstIndexAfter(layout, e, cutoff); got != want {
+					t.Fatalf("%s: firstAlive(%d) = %d, want %d", describe(), cutoff, got, want)
+				}
+			}
+			for _, target := range interiorTargets(layout, e) {
+				requireOutOfOrderRecordsOneEvent(t, layout, e, target, describe)
+			}
+		}
+	}
+}
+
+// randomSearchEntry builds an entry of one of the shapes the search test
+// covers, chosen by trial, with a random number of pruned words before head.
+// The events are recorded in timestamp order, so building the entry never runs
+// the search under test.
+func randomSearchEntry(rng *rand.Rand, l bucketLayout, trial int) *entry {
+	var timestamps []int64
+	start, length := rng.Int64N(1<<20), rng.IntN(600)
+	switch trial % 5 {
+	case 0: // dense: one or more events every second, a few seconds skipped
+		for second := range int64(length) {
+			if rng.IntN(50) == 0 {
+				continue
+			}
+			for range 1 + rng.IntN(3) {
+				timestamps = append(timestamps, start+second)
+			}
+		}
+	case 1: // spilled: hot seconds fill several words
+		for second := range int64(length / 8) {
+			for range 1 + rng.IntN(4*min(l.maxCount, 255)) {
+				timestamps = append(timestamps, start+second)
+			}
+		}
+	case 2: // sparse: random gaps
+		for range length {
+			timestamps = append(timestamps, start+rng.Int64N(int64(1+10*length)))
+		}
+	case 3: // clustered: a few dense runs far apart
+		for range 1 + rng.IntN(4) {
+			from := start + rng.Int64N(1<<30)
+			for second := range int64(1 + rng.IntN(1+length/2)) {
+				timestamps = append(timestamps, from+second)
+			}
+		}
+	default: // anywhere in the representable range, both ends included
+		for range 1 + rng.IntN(8) {
+			timestamps = append(timestamps, l.minTimestamp+rng.Int64N(4), l.maxTimestamp-rng.Int64N(4))
+		}
+		for range length {
+			timestamps = append(timestamps, l.minTimestamp+rng.Int64N(l.maxTimestamp-l.minTimestamp))
+		}
+	}
+	slices.Sort(timestamps)
+	e := &entry{}
+	for _, timestamp := range timestamps {
+		e.recordInOrder(l, timestamp)
+	}
+	return withPrunedPrefix(rng, l, e)
+}
+
+// withPrunedPrefix puts a random number of words before the entry's buckets,
+// older than all of them, and moves head past them, as prune leaves a long run.
+func withPrunedPrefix(rng *rand.Rand, l bucketLayout, e *entry) *entry {
+	if len(e.buckets) == 0 {
+		return e
+	}
+	prefix := rng.IntN(64)
+	oldest := l.timestamp(e.buckets[0])
+	if oldest-int64(prefix) < l.minTimestamp {
+		return e
+	}
+	buckets := make([]bucket, 0, prefix+len(e.buckets))
+	for i := range prefix {
+		buckets = append(buckets, l.newBucket(oldest-int64(prefix-i), 1))
+	}
+	return &entry{buckets: append(buckets, e.buckets...), total: e.total, head: prefix}
+}
+
+// searchCutoffs is every cutoff around every retained timestamp, and the ones
+// that saturate at both ends of the range.
+func searchCutoffs(l bucketLayout, e *entry) []int64 {
+	cutoffs := []int64{math.MinInt64, l.minTimestamp - 1, l.minTimestamp, l.maxTimestamp, math.MaxInt64}
+	for _, b := range e.retained() {
+		timestamp := l.timestamp(b)
+		cutoffs = append(cutoffs, timestamp-1, timestamp, timestamp+1)
+	}
+	return cutoffs
+}
+
+// interiorTargets is every target around every retained timestamp that lies
+// after the oldest retained timestamp and before the newest: the events
+// recordOutOfOrder is given, older than the newest bucket, for which it has to
+// search.
+func interiorTargets(l bucketLayout, e *entry) []int64 {
+	if len(e.retained()) == 0 {
+		return nil
+	}
+	oldest, newest := l.timestamp(e.buckets[e.head]), l.timestamp(e.buckets[len(e.buckets)-1])
+	var targets []int64
+	for _, b := range e.retained() {
+		for _, target := range []int64{l.timestamp(b) - 1, l.timestamp(b), l.timestamp(b) + 1} {
+			if target > oldest && target < newest {
+				targets = append(targets, target)
+			}
+		}
+	}
+	return targets
+}
+
+// firstIndexAfter is the definition firstAlive answers: the first retained word
+// whose timestamp is after cutoff, or len when there is none.
+func firstIndexAfter(l bucketLayout, e *entry, cutoff int64) int {
+	for i := e.head; i < len(e.buckets); i++ {
+		if l.timestamp(e.buckets[i]) > cutoff {
+			return i
+		}
+	}
+	return len(e.buckets)
+}
+
+// requireOutOfOrderRecordsOneEvent records one event at target on a copy of e
+// and checks that exactly that event was added, and that the copy is still
+// sorted, repeats a timestamp only after a full word, holds no empty word and
+// keeps total equal to its counts. A search that stopped anywhere but at the
+// target's first word would add a word next to one with room left, or out of
+// order.
+func requireOutOfOrderRecordsOneEvent(t *testing.T, l bucketLayout, e *entry, target int64, describe func() string) {
+	t.Helper()
+	recorded := &entry{buckets: slices.Clone(e.buckets), total: e.total, head: e.head}
+	recorded.recordOutOfOrder(l, target)
+
+	if got, want := eventsAt(l, recorded, target), eventsAt(l, e, target)+1; got != want {
+		t.Fatalf("%s: recordOutOfOrder(%d) left %d events at the target, want %d", describe(), target, got, want)
+	}
+	sum := 0
+	for i, b := range recorded.retained() {
+		if i > 0 {
+			previous := recorded.retained()[i-1]
+			if l.timestamp(b) < l.timestamp(previous) ||
+				l.timestamp(b) == l.timestamp(previous) && !l.full(previous) {
+				t.Fatalf("%s: recordOutOfOrder(%d) left word %d out of order", describe(), target, i)
+			}
+		}
+		if l.count(b) < 1 {
+			t.Fatalf("%s: recordOutOfOrder(%d) left word %d empty", describe(), target, i)
+		}
+		sum += l.count(b)
+	}
+	if recorded.total != sum || sum != e.total+1 {
+		t.Fatalf("%s: recordOutOfOrder(%d) left total %d over %d counted events, want %d",
+			describe(), target, recorded.total, sum, e.total+1)
+	}
+}
+
+func eventsAt(l bucketLayout, e *entry, timestamp int64) int {
+	events := 0
+	for _, b := range e.retained() {
+		if l.timestamp(b) == timestamp {
+			events += l.count(b)
+		}
+	}
+	return events
+}
+
 // TestStoreSameBucketBoundedMemory pins the memory bound the run-length encoding
 // buys: a single key receiving hundreds of events per second for longer than the
 // window never holds more buckets than the window spans, while every event is
@@ -1801,36 +1990,32 @@ func TestEntrySpillsWhenBucketIsFull(t *testing.T) {
 	})
 }
 
-// TestLowerBoundSaturatesOutsideRange pins that a search target outside the
-// representable bucket range saturates rather than being packed into a word,
-// where the shift would overflow and wrap the comparison around. A fresh cache
-// reaches this: its cutoff sits at math.MinInt64.
-func TestLowerBoundSaturatesOutsideRange(t *testing.T) {
+// TestFirstAliveSaturatesOutsideRange pins that a cutoff outside the
+// representable bucket range is answered without packing it into a word, where
+// the shift would overflow and wrap the comparison around. A fresh cache reaches
+// this: its cutoff sits at math.MinInt64.
+func TestFirstAliveSaturatesOutsideRange(t *testing.T) {
 	e := entryWithBuckets(4, 10, 20, 30)
 
 	cases := []struct {
 		name   string
-		target int64
+		cutoff int64
 		want   int
 	}{
 		{"far below the range", math.MinInt64, 0},
-		{"oldest representable", testLayout.minTimestamp, 0},
+		{"below the oldest representable", testLayout.minTimestamp - 1, 0},
 		{"inside", 25, 2},
 		{"newest representable", testLayout.maxTimestamp, len(e.buckets)},
-		{"just above the range", testLayout.maxTimestamp + 1, len(e.buckets)},
 		{"far above the range", math.MaxInt64, len(e.buckets)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := e.lowerBound(testLayout, tc.target); got != tc.want {
-				t.Fatalf("lowerBound(%d) = %d, want %d", tc.target, got, tc.want)
+			if got := e.firstAlive(testLayout, tc.cutoff); got != tc.want {
+				t.Fatalf("firstAlive(%d) = %d, want %d", tc.cutoff, got, tc.want)
 			}
 		})
 	}
 
-	if got := e.firstAlive(testLayout, math.MinInt64); got != 0 {
-		t.Fatalf("firstAlive at the cutoff of a fresh cache = %d, want 0", got)
-	}
 	if got, want := e.liveCount(testLayout, math.MinInt64), 3; got != want {
 		t.Fatalf("liveCount at the cutoff of a fresh cache = %d, want %d", got, want)
 	}

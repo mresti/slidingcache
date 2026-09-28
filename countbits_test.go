@@ -59,7 +59,7 @@ func TestConfigCountBitsValidation(t *testing.T) {
 
 // TestBucketLayoutBounds checks, for every documented width, that a layout packs
 // and unpacks the extremes of its own range and that the packed words order by
-// timestamp alone, which is what lets lowerBound compare them without unpacking.
+// timestamp alone, which is what lets the searches compare them without unpacking.
 func TestBucketLayoutBounds(t *testing.T) {
 	for _, bits := range []int{8, 12, 16, 20, 24} {
 		t.Run(fmt.Sprint(bits), func(t *testing.T) {
