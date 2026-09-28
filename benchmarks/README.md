@@ -26,6 +26,9 @@ Results saved per PR so they can be compared with benchstat. The extension is
 | `pr-search-aliasing-{serial,parallel}.txt` | bucket search from a guess on evenly spread keys post |
 | `pr-search-aliasing-vs-baseline-{serial,parallel}.txt` | search from a guess vs baseline v1.3.0 |
 | `pr-search-aliasing-vs-pr-entry-compaction-{serial,parallel}.txt` | search from a guess vs entry compaction, the PR it is stacked on |
+| `pr-compact-words-{serial,parallel}.txt` | 4-byte bucket words when the window fits post |
+| `pr-compact-words-vs-baseline-{serial,parallel}.txt` | 4-byte words vs baseline v1.3.0 |
+| `pr-compact-words-vs-pr-search-aliasing-{serial,parallel}.txt` | 4-byte words vs search from a guess, the PR it is stacked on |
 
 Generate the post results plus the comparison:
 ```
@@ -107,6 +110,24 @@ are the largest moves up. Against v1.3.0 the gate holds (`StoreManyKeys` -0.6%,
 `StoreHotKeyNanos` -17.2%, `GetHitManyKeys` -2.2%, `ParallelStore` within
 noise), allocations are unchanged and `MemoryFootprint` stays at 211
 bytes/key.
+
+The 4-byte words change is stacked on the search change and compared with its
+files. It is a memory change: every benchmark here uses a window short enough
+for 4-byte words (at most 4,096 seconds at the default `CountBits`), so every
+key's array halves. `MemoryFootprint` goes from 211 to 147 bytes/key (-30.3%),
+and the keys that fill a long window read faster from their halved arrays:
+`GetFullWindowKeys/idle` -23.3%, `/lagging` -14.4%,
+`StoreFullWindowKeys/out-of-order` -4.1%, `StoreOutOfOrder` -3.8%,
+`StoreSingleKey` -2.0%. What it costs is the decoding of a word against its
+key's base and a store to that base on every `Store`: the rows that spread
+their stores over many keys of a few buckets each are 1-4% slower than the
+search change's files (`StoreSteadyState` +2.7% to +3.5%,
+`StoreSteadyStateWithSkew` +2.1% to +3.6%, `GetHitManyKeys` +2.5%,
+`StoreManyKeys` +2.0%, `StoreMediumCardinalitySameBucket` +1.0% to +3.0%,
+`Sweep/keys=100000` +2.2%, `StoreHotKeyNanos` +1.3%). Against v1.3.0 the gate
+holds (`StoreManyKeys` +1.4%, `StoreHotKeyNanos` -16.1%, `GetHitManyKeys`
++0.3%, `ParallelStore` +1.0%) and allocations are unchanged. Serial geomean
+-0.8% against the search change, -7.3% against v1.3.0.
 
 The diagnostics benchmarks, `BenchmarkHighWater` and `BenchmarkStats`, are
 deliberately named outside the `Store|Get|Sweep|Memory` families (like
