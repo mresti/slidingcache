@@ -20,6 +20,9 @@ Results saved per PR so they can be compared with benchstat. The extension is
 | `pr-c-stats-vs-baseline-{serial,parallel}.txt` | PR-C vs baseline v1.2.0 |
 | `pr-fast-path-live-count-{serial,parallel}.txt` | fast-path live count (O(1) cutoff check, scan-free idle `Get`) post |
 | `pr-fast-path-live-count-vs-baseline-{serial,parallel}.txt` | fast-path live count vs baseline v1.3.0 |
+| `pr-entry-compaction-{serial,parallel}.txt` | entry compaction (bounded growth, in-place compaction) post |
+| `pr-entry-compaction-vs-baseline-{serial,parallel}.txt` | entry compaction vs baseline v1.3.0 |
+| `pr-entry-compaction-vs-pr-fast-path-live-count-{serial,parallel}.txt` | entry compaction vs fast-path live count, the PR it is stacked on |
 
 Generate the post results plus the comparison:
 ```
@@ -65,6 +68,24 @@ unchanged and `MemoryFootprint` stays at 195 bytes/key; `StoreFutureReject`
 +0.3% is on a path the change does not touch. Most rows keep a few buckets per
 key; on keys holding a 1,800-bucket window an in-order `Store` is about 40%
 faster and a `Get` on an idle key 95%, which the PR description measures.
+
+The entry compaction change is stacked on the fast-path one, so besides
+`baseline-v1.3.0` it is compared with the fast-path files, which isolates its own
+effect. It is a memory change: a key that fills a long window settles in a
+smaller array and slides it without allocating, which shows as `B/op` 26 -> 0 on
+`StoreSingleKey` and `StoreAdvancingHighWater` and 18 -> 0 on `StoreOutOfOrder`,
+and as `StoreSingleKey` -16.1% and `StoreAdvancingHighWater` -15.4%/-14.4%
+against the fast-path files. What it costs: `entry` moves from the 32-byte to the
+48-byte size class, so `MemoryFootprint` goes from 195 to 211 bytes/key (+8.2%),
+and the rows that spread their stores over many small keys are 3-7% slower than
+the fast-path files (`StoreSteadyState`, `StoreMediumCardinalitySameBucket`,
+`StoreSteadyStateWithSkew`, `Sweep`). Against v1.3.0 the gate holds
+(`StoreManyKeys` +1.6%, `StoreHotKeyNanos` -17.4%, `GetHitManyKeys` -2.1%,
+`ParallelStore` within noise); the largest regressions left are
+`StoreMediumCardinalitySameBucket/keys=1000` +3.6% and
+`StoreSteadyStateWithSkew` +1.8% to +3.0%. `ParallelStore-4`'s runs split
+between about 13 and 18 ns with the share of its stores refused as late; at an
+equal share this change costs about 2% there.
 
 The diagnostics benchmarks, `BenchmarkHighWater` and `BenchmarkStats`, are
 deliberately named outside the `Store|Get|Sweep|Memory` families (like

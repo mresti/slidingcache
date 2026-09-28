@@ -414,7 +414,7 @@ func New(cfg Config, opts ...Option) (*Cache, error) {
 		clock:         cfg.futureClock(),
 
 		layout:     layout,
-		shards:     newShards(shardCount, layout),
+		shards:     newShards(shardCount, layout, int(cfg.WindowSize/cfg.Precision)),
 		shardMask:  shardMaskOf(shardCount),
 		sweepEvery: cfg.sweepInterval(),
 		done:       make(chan struct{}),

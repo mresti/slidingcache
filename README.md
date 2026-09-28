@@ -519,10 +519,16 @@ bounded through four mechanisms:
    all shards, prunes expired buckets, and deletes keys left without events.
 4. **Right-sizing and map compaction.** When a key's bucket slice has a backing
    array much larger than its live contents, the survivors are copied into a
-   right-sized slice so the large array can be collected instead of being pinned
-   by a re-slice. During a sweep, if a shard's live key count has fallen well
-   below its observed peak, the shard's map is rebuilt into a fresh, right-sized
-   map to release hash-bucket memory to the garbage collector.
+   right-sized slice so the large array can be collected instead of staying
+   pinned. A long key keeps the room its pruned buckets leave at the front of
+   its array and, once the array fills, compacts its retained buckets into that
+   room instead of reallocating; when it does have to grow, it grows to its
+   window plus an eighth rather than by `append`'s quarter. A key that fills a
+   window of 1,800 buckets therefore settles in a 16 KiB array instead of a
+   20 KiB one and slides it without allocating. During a sweep, if a shard's
+   live key count has fallen well below its observed peak, the shard's map is
+   rebuilt into a fresh, right-sized map to release hash-bucket memory to the
+   garbage collector.
 
 Call `Close` to stop the janitor when the cache is no longer needed. `Close` is
 idempotent and safe to call concurrently.

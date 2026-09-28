@@ -25,6 +25,10 @@ type shard struct {
 	// reads it from the shard it has already loaded. It is read-only, so it comes
 	// last, after every field an operation writes.
 	layout bucketLayout
+	// windowBuckets is WindowSize/Precision, the most distinct buckets a key can
+	// retain, which caps how far an entry's array grows (see grownCapacity).
+	// Read-only, and read only when an array fills up.
+	windowBuckets int
 }
 
 // shardRejects counts the rejections decided before the shard lock is taken, so
@@ -58,10 +62,10 @@ type shardCounters struct {
 // a path that is never hot.
 const cacheLineSize = 64
 
-func newShards(count int, layout bucketLayout) []*shard {
+func newShards(count int, layout bucketLayout, windowBuckets int) []*shard {
 	shards := make([]*shard, count)
 	for i := range shards {
-		shards[i] = &shard{layout: layout, keys: make(map[string]*entry)}
+		shards[i] = &shard{layout: layout, windowBuckets: windowBuckets, keys: make(map[string]*entry)}
 	}
 	return shards
 }
@@ -95,6 +99,9 @@ func (s *shard) store(key string, timestamp int64, highWater *atomic.Int64, wind
 	}
 
 	e.prune(s.layout, cutoff)
+	if e.needsRoom(s.layout, timestamp) {
+		e.makeRoom(s.windowBuckets)
+	}
 	// Spelled out instead of e.insert so that the in-order path inlines here;
 	// see entry.insert for why the combined function does not.
 	if e.inOrder(s.layout, timestamp) {

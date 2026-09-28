@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"reflect"
+	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -723,9 +724,9 @@ func (c *Cache) retainedEvents(key string) int {
 }
 
 // bucketBreadth reports how many Precision buckets are physically retained for
-// key, expired ones included, or -1 when the key is absent. It is the memory the
-// key occupies, which the run-length encoding keeps independent of the event
-// rate.
+// key, expired ones not yet pruned included, or -1 when the key is absent. It is
+// the memory the key's events occupy, which the run-length encoding keeps
+// independent of the event rate.
 func (c *Cache) bucketBreadth(key string) int {
 	s := c.shardFor(key)
 	s.mu.Lock()
@@ -735,7 +736,25 @@ func (c *Cache) bucketBreadth(key string) int {
 	if !ok {
 		return -1
 	}
-	return len(e.buckets)
+	return len(e.retained())
+}
+
+// retained returns the buckets the entry still counts in total: those after the
+// pruned prefix it keeps for room.
+func (e *entry) retained() []bucket { return e.buckets[e.head:] }
+
+// arrayBytes reports the size of key's backing array, pruned prefix and unused
+// room included, or -1 when the key is absent: the memory the key's buckets pin.
+func (c *Cache) arrayBytes(key string) int {
+	s := c.shardFor(key)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	e, ok := s.keys[key]
+	if !ok {
+		return -1
+	}
+	return cap(e.buckets) * int(unsafe.Sizeof(bucket(0)))
 }
 
 func TestRoundUpPow2(t *testing.T) {
@@ -1267,10 +1286,10 @@ func TestEntryPruneBranches(t *testing.T) {
 		}
 	})
 
-	t.Run("long survivor run is re-sliced forward", func(t *testing.T) {
+	t.Run("long survivor run stays in place behind a moved head", func(t *testing.T) {
 		const survivors, expired = pruneCopyMaxLen + 1, 8 // just past the threshold.
 		e := entryWithBuckets(2*survivors, sequence(0, expired+survivors)...)
-		capBefore := cap(e.buckets)
+		backingArray, capBefore := &e.buckets[0], cap(e.buckets)
 		firstSurvivor := &e.buckets[expired]
 
 		e.prune(testLayout, expired-1)
@@ -1279,11 +1298,11 @@ func TestEntryPruneBranches(t *testing.T) {
 		if got, want := e.expanded(), sequence(expired, survivors); !slices.Equal(got, want) {
 			t.Fatalf("events = %v, want %v", got, want)
 		}
-		if &e.buckets[0] != firstSurvivor {
-			t.Fatal("long survivor run was copied, want a free forward re-slice")
+		if &e.retained()[0] != firstSurvivor {
+			t.Fatal("long survivor run was copied, want it left in place")
 		}
-		if got, want := cap(e.buckets), capBefore-expired; got != want {
-			t.Fatalf("cap = %d, want %d (the dropped prefix is given up)", got, want)
+		if &e.buckets[0] != backingArray || cap(e.buckets) != capBefore {
+			t.Fatal("prune gave up the front of the array, want it kept for a later compaction")
 		}
 	})
 
@@ -1381,13 +1400,13 @@ func TestPruneAndLiveCountMatchDefinitionAtEveryCutoff(t *testing.T) {
 				t.Fatalf("trial %d: liveCount(%d) = %d, want %d", trial, cutoff, got, want)
 			}
 
-			pruned := &entry{buckets: slices.Clone(e.buckets), total: e.total}
+			pruned := &entry{buckets: slices.Clone(e.buckets), total: e.total, head: e.head}
 			pruned.prune(layout, cutoff)
 			if pruned.total != want || eventsNewerThan(layout, pruned, cutoff) != want {
 				t.Fatalf("trial %d: prune(%d) kept total %d and %d live events, want %d of both",
 					trial, cutoff, pruned.total, eventsNewerThan(layout, pruned, cutoff), want)
 			}
-			if !pruned.aliveFrom(layout, 0, cutoff) {
+			if !pruned.aliveFrom(layout, pruned.head, cutoff) {
 				t.Fatalf("trial %d: prune(%d) left an expired bucket first", trial, cutoff)
 			}
 		}
@@ -1396,7 +1415,7 @@ func TestPruneAndLiveCountMatchDefinitionAtEveryCutoff(t *testing.T) {
 
 func eventsNewerThan(l bucketLayout, e *entry, cutoff int64) int {
 	events := 0
-	for _, b := range e.buckets {
+	for _, b := range e.retained() {
 		if l.timestamp(b) > cutoff {
 			events += l.count(b)
 		}
@@ -1457,6 +1476,148 @@ func TestStoreSameBucketBoundedMemory(t *testing.T) {
 	}
 }
 
+// TestDenseKeySettlesInTheWindowsSizeClassWithoutAllocating pins what keeping
+// the pruned prefix buys a key that touches every second of a long window: its
+// array settles in the smallest size class that holds the window, 16 KiB for
+// 1,800 one-second buckets rather than the 20 KiB append's quarter growth would
+// pick, and from then on sliding the window costs no allocation at all, because
+// the retained buckets are compacted into the room the pruned ones left.
+func TestDenseKeySettlesInTheWindowsSizeClassWithoutAllocating(t *testing.T) {
+	const (
+		windowSeconds  = 1_800
+		windowSizeCap  = 16 << 10
+		steadyFrom     = 3 * windowSeconds
+		steadySeconds  = 2 * windowSeconds
+		eventsPerFrame = 2
+	)
+	c := newTestCache(
+		t,
+		Config{Precision: time.Second, WindowSize: windowSeconds * time.Second, EpochUnit: EpochInSeconds},
+	)
+
+	epoch := int64(0)
+	storeSecond := func() {
+		epoch++
+		for event := range eventsPerFrame {
+			want := eventsPerFrame*min(int(epoch)-1, windowSeconds-1) + event + 1
+			if got := c.Store(epoch, "dense"); got != want {
+				t.Fatalf("Store at second %d = %d, want %d", epoch, got, want)
+			}
+		}
+	}
+	for epoch < steadyFrom {
+		storeSecond()
+		if epoch > windowSeconds+windowSeconds/2 && c.arrayBytes("dense") > windowSizeCap {
+			t.Fatalf(
+				"at second %d the array holds %d bytes, want at most %d",
+				epoch,
+				c.arrayBytes("dense"),
+				windowSizeCap,
+			)
+		}
+	}
+
+	if allocs := mallocsDuring(steadySeconds, storeSecond); allocs != 0 {
+		t.Fatalf("sliding the window for %d seconds allocated %d times, want 0", steadySeconds, allocs)
+	}
+	if got := c.arrayBytes("dense"); got > windowSizeCap {
+		t.Fatalf("after %d seconds the array holds %d bytes, want at most %d", epoch, got, windowSizeCap)
+	}
+	if got, want := c.bucketBreadth("dense"), windowSeconds; got != want {
+		t.Fatalf("retained buckets = %d, want %d", got, want)
+	}
+}
+
+// TestKeyThatGoesQuietReleasesItsArray pins that keeping the pruned prefix does
+// not keep memory a key no longer needs: once a dense key thins out to one
+// event every ten seconds, its retained buckets fall far below the array, and
+// prune right-sizes it as it did before.
+func TestKeyThatGoesQuietReleasesItsArray(t *testing.T) {
+	const (
+		windowSeconds = 1_800
+		quietEvery    = 10
+	)
+	c := newTestCache(
+		t,
+		Config{Precision: time.Second, WindowSize: windowSeconds * time.Second, EpochUnit: EpochInSeconds},
+	)
+
+	epoch := int64(0)
+	for range 2 * windowSeconds {
+		epoch++
+		c.Store(epoch, "fading")
+	}
+	dense := c.arrayBytes("fading")
+
+	for range 2 * windowSeconds / quietEvery {
+		epoch += quietEvery
+		if got, want := c.Store(epoch, "fading"), 0; got <= want {
+			t.Fatalf("Store at second %d = %d, want a positive count", epoch, got)
+		}
+	}
+
+	if got, want := c.bucketBreadth("fading"), windowSeconds/quietEvery; got != want {
+		t.Fatalf("retained buckets = %d, want %d", got, want)
+	}
+	if got := c.arrayBytes("fading"); got > dense/4 {
+		t.Fatalf("the quiet key still pins %d bytes, want at most a quarter of the %d it held while dense", got, dense)
+	}
+}
+
+// TestSpillingKeySlidesWithoutAllocating pins the compaction on a key whose
+// buckets spill: at the narrowest count, a thousand events a second take four
+// words each second, so the key retains four times as many words as its window
+// has buckets. Its counts stay exact and, once it has grown to that, sliding
+// its window allocates nothing either.
+func TestSpillingKeySlidesWithoutAllocating(t *testing.T) {
+	const (
+		windowSeconds    = 300
+		eventsPerSecond  = 1_000
+		steadyFromSecond = 3 * windowSeconds
+	)
+	c := newTestCache(t, Config{
+		Precision:  time.Second,
+		WindowSize: windowSeconds * time.Second,
+		EpochUnit:  EpochInSeconds,
+		CountBits:  minCountBits,
+	})
+	wordsPerSecond := (eventsPerSecond + c.layout.maxCount - 1) / c.layout.maxCount
+
+	epoch := int64(0)
+	storeSecond := func() {
+		epoch++
+		for event := range eventsPerSecond {
+			want := eventsPerSecond*min(int(epoch)-1, windowSeconds-1) + event + 1
+			if got := c.Store(epoch, "spilling"); got != want {
+				t.Fatalf("Store at second %d = %d, want %d", epoch, got, want)
+			}
+		}
+	}
+	for epoch < steadyFromSecond {
+		storeSecond()
+	}
+
+	if allocs := mallocsDuring(windowSeconds, storeSecond); allocs != 0 {
+		t.Fatalf("sliding the spilled window for %d seconds allocated %d times, want 0", windowSeconds, allocs)
+	}
+	if got, want := c.bucketBreadth("spilling"), windowSeconds*wordsPerSecond; got != want {
+		t.Fatalf("retained words = %d, want %d", got, want)
+	}
+}
+
+// mallocsDuring counts the heap allocations made while f runs the given number
+// of times. Unlike testing.AllocsPerRun, which rounds the average down, it
+// reports a single allocation among thousands of runs.
+func mallocsDuring(runs int, f func()) uint64 {
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range runs {
+		f()
+	}
+	runtime.ReadMemStats(&after)
+	return after.Mallocs - before.Mallocs
+}
+
 // requireEntryInvariants asserts the invariants documented on entry: buckets
 // sorted by non-decreasing timestamp, a repeated timestamp only after a full
 // bucket, every count positive, and total equal to their sum.
@@ -1464,9 +1625,9 @@ func requireEntryInvariants(t *testing.T, e *entry) {
 	t.Helper()
 
 	sum := 0
-	for i, b := range e.buckets {
+	for i, b := range e.retained() {
 		if i > 0 {
-			requireOrderedAfterPrevious(t, e, i)
+			requireOrderedAfterPrevious(t, e.retained(), i)
 		}
 		if testLayout.count(b) < 1 {
 			t.Fatalf(
@@ -1484,10 +1645,10 @@ func requireEntryInvariants(t *testing.T, e *entry) {
 // requireOrderedAfterPrevious asserts that the bucket at index sits legally
 // after its predecessor: a later timestamp, or the same one when the
 // predecessor is full and this bucket is its spill.
-func requireOrderedAfterPrevious(t *testing.T, e *entry, index int) {
+func requireOrderedAfterPrevious(t *testing.T, buckets []bucket, index int) {
 	t.Helper()
 
-	current, previous := e.buckets[index], e.buckets[index-1]
+	current, previous := buckets[index], buckets[index-1]
 	if testLayout.timestamp(current) < testLayout.timestamp(previous) {
 		t.Fatalf(
 			"bucket %d has timestamp %d, want >= %d",
@@ -1506,7 +1667,7 @@ func requireOrderedAfterPrevious(t *testing.T, e *entry, index int) {
 // representation the window semantics are defined in.
 func (e *entry) expanded() []int64 {
 	var out []int64
-	for _, b := range e.buckets {
+	for _, b := range e.retained() {
 		for range testLayout.count(b) {
 			out = append(out, testLayout.timestamp(b))
 		}

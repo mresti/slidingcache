@@ -1,0 +1,67 @@
+# parallel -cpu=4 | commit d5d8fa0 (perf/entry-compaction)
+goos: darwin
+goarch: arm64
+pkg: github.com/mresti/slidingcache
+cpu: Apple M2
+BenchmarkParallelGet-4           	91398104	        12.90 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelGet-4           	91586742	        12.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelGet-4           	91826773	        12.82 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelGet-4           	91337526	        12.85 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelGet-4           	91081303	        12.83 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelGet-4           	91814190	        12.95 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelGet-4           	91325937	        12.81 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelGet-4           	91176465	        13.11 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelGet-4           	92161183	        12.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelGet-4           	91870135	        12.80 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelMixed-4         	90706375	        12.37 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelMixed-4         	86692411	        12.85 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelMixed-4         	87747360	        12.93 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelMixed-4         	89393524	        12.89 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelMixed-4         	78616351	        12.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelMixed-4         	87857377	        13.03 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelMixed-4         	87470728	        12.86 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelMixed-4         	87259507	        12.84 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelMixed-4         	88734148	        12.81 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelMixed-4         	87285422	        12.94 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStore-4         	81261354	        13.49 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStore-4         	82779788	        13.08 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStore-4         	91586331	        16.10 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStore-4         	90934275	        18.14 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStore-4         	91148235	        18.08 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStore-4         	83055040	        13.10 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStore-4         	91601708	        18.22 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStore-4         	83911195	        13.27 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStore-4         	90503810	        18.12 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStore-4         	92741013	        15.95 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=16-4         	88513822	        16.42 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=16-4         	89412171	        13.15 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=16-4         	80249661	        14.77 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=16-4         	83050488	        13.85 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=16-4         	74569092	        14.31 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=16-4         	80425358	        13.42 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=16-4         	85233078	        13.34 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=16-4         	81222171	        13.76 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=16-4         	77399175	        13.45 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=16-4         	82607647	        14.82 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=64-4         	73601190	        13.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=64-4         	75337449	        13.67 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=64-4         	87651046	        15.49 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=64-4         	73783153	        13.69 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=64-4         	88377385	        14.79 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=64-4         	79729360	        13.89 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=64-4         	72232766	        13.86 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=64-4         	73040461	        14.49 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=64-4         	74413029	        14.71 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=64-4         	73314714	        14.50 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=256-4        	81884712	        13.48 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=256-4        	79743268	        14.13 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=256-4        	85028439	        14.25 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=256-4        	79027086	        14.16 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=256-4        	84240205	        14.53 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=256-4        	80996253	        14.33 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=256-4        	76472086	        13.76 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=256-4        	72177736	        14.12 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=256-4        	82430319	        13.66 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParallelStoreShards/shards=256-4        	74775867	        14.14 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/mresti/slidingcache	84.197s
