@@ -92,10 +92,10 @@ func (l bucketLayout) accepts(b bucket, timestamp int64) bool {
 	return l.timestamp(b) == timestamp && !l.full(b)
 }
 
-// floor is the smallest word whose timestamp is timestamp, used as a
-// binary-search target so the search compares packed words without unpacking
-// them. It is only meaningful for a timestamp within the representable range,
-// which lowerBound checks before calling it.
+// floor is the smallest word whose timestamp is timestamp, used as a search
+// target so the search compares packed words without unpacking them. It is only
+// meaningful for a timestamp within the representable range, which is why
+// the searches are only given targets between two stored timestamps.
 func (l bucketLayout) floor(timestamp int64) bucket { return bucket(timestamp << l.countBits) }
 
 // entry holds the buckets of a single key.
@@ -181,34 +181,75 @@ func (e *entry) recordInOrder(l bucketLayout, timestamp int64) {
 // a new word pays the shift; repeats of an existing bucket cost an increment, so
 // a hot key that receives jittered timestamps cannot degrade into a memmove per
 // event.
+//
+// The word is looked up the way firstAlive looks up the first live one. The
+// search from a guess is a call, so it is made from recordFromGuess, where
+// nothing is left to do after it: with the call in this function and the event
+// still to record after it, the compiler spilled registers on every path, which
+// cost about 4% on BenchmarkStoreOutOfOrder, whose key is too uneven to ever
+// take the guess.
 func (e *entry) recordOutOfOrder(l bucketLayout, timestamp int64) {
 	e.total++
-	i := e.lowerBound(l, timestamp)
+	switch {
+	case l.timestamp(e.buckets[e.head]) >= timestamp:
+		e.recordAt(l, timestamp, e.head)
+	case e.evenlySpread(l):
+		e.recordFromGuess(l, timestamp)
+	default:
+		e.recordAt(l, timestamp, e.bisect(e.head+1, len(e.buckets)-1, l.floor(timestamp)))
+	}
+}
+
+// recordFromGuess is recordOutOfOrder on an evenly spread entry, for an event
+// newer than its oldest bucket.
+func (e *entry) recordFromGuess(l bucketLayout, timestamp int64) {
+	e.recordAt(l, timestamp, e.searchFromGuess(l, timestamp))
+}
+
+// recordAt counts an event into the first word from index i on that holds its
+// timestamp and has room, or into a new word at i when there is none; i is the
+// first word at or after the timestamp. It is below len because the event is
+// older than the newest bucket, so the new word can be inserted by a single
+// append of the tail onto itself, which keeps recordAt within the inliner's
+// budget and gives each of recordOutOfOrder's three lookups its own copy.
+func (e *entry) recordAt(l bucketLayout, timestamp int64, i int) {
 	for ; i < len(e.buckets) && l.timestamp(e.buckets[i]) == timestamp; i++ {
 		if !l.full(e.buckets[i]) {
 			e.buckets[i]++
 			return
 		}
 	}
-	e.buckets = append(e.buckets, 0)
-	copy(e.buckets[i+1:], e.buckets[i:])
+	e.buckets = append(e.buckets[:i+1], e.buckets[i:]...)
 	e.buckets[i] = l.newBucket(timestamp, 1)
 }
 
 // firstAlive returns the index of the first bucket that is still alive
 // (timestamp > cutoff). Because the slice is sorted, expired buckets form a
-// prefix, so the index doubles as the length of that prefix. cutoff+1 cannot
-// overflow: cutoff is derived from a high-water mark minus a WindowSize of at
-// least one second, and lowerBound saturates on a cutoff that lies outside the
-// representable bucket range.
+// prefix, so the index doubles as the length of that prefix.
 //
 // The index is never below head. Get and the janitor read the cutoff before
 // they take the shard lock, so a concurrent Store can prune the entry with a
 // newer cutoff in between; the buckets the older cutoff would still call alive
 // have then already been discounted from total, exactly as if prune had dropped
 // them.
+//
+// Nothing expired and everything expired are answered from the oldest and the
+// newest retained word, so a key left idle for a whole window costs one word
+// rather than a search. Both checks compare unpacked timestamps, which holds at
+// any cutoff, including the math.MinInt64 of a cache that has not observed an
+// epoch yet; any other cutoff lies between two stored timestamps, so cutoff+1
+// is one too and the search can pack it.
 func (e *entry) firstAlive(l bucketLayout, cutoff int64) int {
-	return e.lowerBound(l, cutoff+1)
+	newest := len(e.buckets) - 1
+	switch {
+	case e.aliveFrom(l, e.head, cutoff):
+		return e.head
+	case !e.aliveFrom(l, newest, cutoff):
+		return newest + 1
+	case e.evenlySpread(l):
+		return e.searchFromGuess(l, cutoff+1)
+	}
+	return e.bisect(e.head+1, newest, l.floor(cutoff+1))
 }
 
 // aliveFrom reports whether every bucket from index i on is still alive under
@@ -221,8 +262,7 @@ func (e *entry) firstAlive(l bucketLayout, cutoff int64) int {
 // prune and liveCount therefore ask aliveFrom head and then head+1 before they
 // search the entry, which settles almost every call from its first two
 // retained words. The check compares the unpacked timestamp, so it cannot
-// overflow whatever the cutoff, and it stays within the inliner's budget, which
-// firstAlive does only without these checks.
+// overflow whatever the cutoff, and it stays within the inliner's budget.
 func (e *entry) aliveFrom(l bucketLayout, i int, cutoff int64) bool {
 	return i >= len(e.buckets) || l.timestamp(e.buckets[i]) > cutoff
 }
@@ -235,9 +275,10 @@ func (e *entry) aliveFrom(l bucketLayout, i int, cutoff int64) bool {
 // of the two is shorter. The prefix is empty or a single bucket for any key
 // stored or read since the cutoff last moved, which is the common case and
 // aliveFrom settles without a search. A key that was written and then left
-// untouched until all of its buckets expired has an empty suffix instead, so it
-// costs the search and no scan, where subtracting its prefix would walk
-// WindowSize/Precision buckets. The worst case is half the entry.
+// untouched until all of its buckets expired has an empty suffix instead, which
+// firstAlive finds from the newest word, so it costs neither a search nor a
+// scan, where subtracting its prefix would walk WindowSize/Precision buckets.
+// The worst case is half the entry.
 func (e *entry) liveCount(l bucketLayout, cutoff int64) int {
 	switch {
 	case e.aliveFrom(l, e.head, cutoff):
@@ -261,32 +302,89 @@ func sumCounts(l bucketLayout, buckets []bucket) int {
 	return sum
 }
 
-// lowerBound returns the index of the first retained bucket with a timestamp
-// >= target, or len when there is none. It compares packed words against the
-// word target floors to, so the search never unpacks a bucket. It searches from
-// head, not from the start of the array: the answer is never in the pruned
-// prefix, and a search that starts at the retained buckets takes the same path
-// every time a steadily written key drops its oldest bucket, which the branch
-// predictor learns, where one over the whole array would shift with head.
+// searchFromGuess returns the index of the first retained bucket with a
+// timestamp >= target, for a target newer than the oldest retained bucket and no
+// newer than the newest, on an evenly spread entry. The answer lies in
+// (head, len-1]. Its callers settle the targets outside that range from the end
+// words, comparing unpacked timestamps; within it the target is a representable
+// timestamp, so the search compares packed words against the word it floors to
+// and never unpacks a bucket.
 //
-// A target outside the representable range saturates instead of being packed:
-// shifting it into a word would overflow and wrap the comparison around. This is
-// not hypothetical, because firstAlive derives its target from a cutoff, and the
-// cutoff of a cache that has not yet observed an epoch sits at math.MinInt64.
+// It starts from a guess rather than from the middle. On an evenly spread entry
+// — one word per bucket for a key written every bucket — where target would sit
+// if the timestamps were exactly even (interpolate) is the answer or a few words
+// off. The search probes that guess, gallops away from it in doubling steps of
+// at most maxGallop words, which settles a key with a few gaps or spilled
+// buckets within a line or two of the guess, and bisects whatever the gallop has
+// not ruled out.
 //
-// The search is hand-rolled rather than delegating to slices.BinarySearchFunc so
-// that it stays within the inliner's budget: every read and write of an entry
-// goes through it, and the call overhead dominates for the short slices that a
-// bounded window produces.
-func (e *entry) lowerBound(l bucketLayout, target int64) int {
-	if target <= l.minTimestamp {
-		return e.head
-	}
-	if target > l.maxTimestamp {
-		return len(e.buckets)
-	}
+// Bisection from the middle probes the same indices on every key of the same
+// length, and a key that fills a long window holds a power-of-two array (16 KiB
+// for 1,800 one-second buckets, see grownCapacity), so over a population of such
+// keys its first probes land in the same few cache sets and evict one another.
+// The guess touches one or two lines next to the answer instead of about seven
+// spread over the array.
+func (e *entry) searchFromGuess(l bucketLayout, target int64) int {
+	low, high := e.head+1, len(e.buckets)-1
 	floor := l.floor(target)
-	low, high := e.head, len(e.buckets)
+	guess := e.interpolate(l, target)
+	if e.buckets[guess] < floor {
+		low = guess + 1
+		for step := 1; step <= maxGallop && guess+step < high; step <<= 1 {
+			if e.buckets[guess+step] >= floor {
+				return e.bisect(low, guess+step, floor)
+			}
+			low = guess + step + 1
+		}
+		return e.bisect(low, high, floor)
+	}
+	high = guess
+	for step := 1; step <= maxGallop && guess-step >= low; step <<= 1 {
+		if e.buckets[guess-step] < floor {
+			return e.bisect(guess-step+1, high, floor)
+		}
+		high = guess - step
+	}
+	return e.bisect(low, high, floor)
+}
+
+// evenlySpread reports whether the retained words cover at least 8/9 of their
+// timestamp span, which is when searchFromGuess's guess is close enough to be
+// worth a probe. A sparser key is bisected instead: its guess could be far off,
+// and on an entry that fits the L1 cache the probes a wrong guess wastes cost
+// more than the bisection steps it saves. A key with a Precision above one
+// second spans Precision timestamps per bucket and is always bisected.
+//
+// The bound also keeps interpolate's product in range: with the span at most
+// 9/8 of the words and the words below 2^31, it stays below 2^63.
+func (e *entry) evenlySpread(l bucketLayout) bool {
+	head, newest := e.head, len(e.buckets)-1
+	span := l.timestamp(e.buckets[newest]) - l.timestamp(e.buckets[head])
+	words := int64(newest - head)
+	return span-words <= words>>3 && words>>31 == 0
+}
+
+// interpolate returns where target would sit among the retained buckets if
+// their timestamps were evenly spread from the oldest to the newest: an index in
+// [head, len-1] for a target in searchFromGuess's range.
+func (e *entry) interpolate(l bucketLayout, target int64) int {
+	head, newest := e.head, len(e.buckets)-1
+	oldest := l.timestamp(e.buckets[head])
+	span, words := l.timestamp(e.buckets[newest])-oldest, int64(newest-head)
+	return head + int((target-oldest)*words/span)
+}
+
+// maxGallop is the longest step searchFromGuess gallops from its guess before it
+// bisects the rest: eight words, so the gallop stays within two cache lines of
+// the guess.
+const maxGallop = 8
+
+// bisect returns the first index in [low, high) whose word is >= floor, or high
+// when there is none. The words in that range are sorted, as every entry's are.
+//
+// It is hand-rolled rather than delegating to slices.BinarySearchFunc so that it
+// stays within the inliner's budget.
+func (e *entry) bisect(low, high int, floor bucket) int {
 	for low < high {
 		mid := int(uint(low+high) >> 1)
 		if e.buckets[mid] < floor {
@@ -314,16 +412,21 @@ func (e *entry) lowerBound(l bucketLayout, target int64) int {
 //   - Moving head forward, for a long survivor run: dropping the prefix costs
 //     nothing per call, and the room it leaves at the front of the array is
 //     reclaimed in one copy once the array fills up (see makeRoom).
+//
+// An entry with more than its oldest bucket expired is handed to
+// pruneSearching, and the hand-off is the last thing prune does there: with the
+// search's call on a path that had work left after it, the compiler spilled
+// registers on every path, which cost up to 5% on stores that expire exactly
+// one bucket, the path almost every Store of a steadily written key takes.
 func (e *entry) prune(l bucketLayout, cutoff int64) {
-	var firstAlive int
 	switch {
 	case e.aliveFrom(l, e.head, cutoff):
 		return
-	case e.aliveFrom(l, e.head+1, cutoff):
-		firstAlive = e.head + 1
-	default:
-		firstAlive = e.firstAlive(l, cutoff)
+	case !e.aliveFrom(l, e.head+1, cutoff):
+		e.pruneSearching(l, cutoff)
+		return
 	}
+	firstAlive := e.head + 1
 	e.total -= sumCounts(l, e.buckets[e.head:firstAlive])
 	if firstAlive == len(e.buckets) {
 		e.head = 0
@@ -345,6 +448,16 @@ func (e *entry) prune(l bucketLayout, cutoff int64) {
 		return
 	}
 	e.head = firstAlive
+}
+
+// pruneSearching is prune for an entry with at least two buckets expired. It
+// moves head onto the newest expired bucket, discounting the ones before it,
+// and prunes again, which then finds exactly one bucket expired.
+func (e *entry) pruneSearching(l bucketLayout, cutoff int64) {
+	lastExpired := e.firstAlive(l, cutoff) - 1
+	e.total -= sumCounts(l, e.buckets[e.head:lastExpired])
+	e.head = lastExpired
+	e.prune(l, cutoff)
 }
 
 // needsRoom reports whether recording one more event at timestamp would append
