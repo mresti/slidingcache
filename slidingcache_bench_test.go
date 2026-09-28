@@ -524,3 +524,103 @@ func BenchmarkStoreSteadyStateWithSkew(b *testing.B) {
 		})
 	}
 }
+
+// fullWindowKeys and fullWindowBuckets shape the full-window benchmarks: sets of
+// keys written every second of a 30-minute window of one-second buckets, so each
+// key holds 1,800 buckets and settles in the 16 KiB array class, and each set's
+// arrays (about 160 MB) are far larger than the CPU caches.
+const (
+	fullWindowKeys    = 10_000
+	fullWindowBuckets = 1800
+)
+
+// fullWindowCache builds a cache in which idle is written once in every second
+// of one window and keys once in every second of the next, and returns it with
+// the last second written, where idle's buckets have all just expired. The
+// window is the benchmarks' own, one-second buckets over 30 minutes, rather than
+// benchConfig's hour: at 1,800 buckets the arrays land in a power-of-two size
+// class, which is what these benchmarks exercise.
+func fullWindowCache(b *testing.B, idle, keys []string) (*Cache, int64) {
+	b.Helper()
+	cfg := benchConfig()
+	cfg.WindowSize = fullWindowBuckets * time.Second
+	c := newBenchCache(b, cfg)
+	const start = 1_000_000
+	fill := func(keys []string, from int64) {
+		for second := range int64(fullWindowBuckets) {
+			for _, key := range keys {
+				c.Store(from+second, key)
+			}
+		}
+	}
+	fill(idle, start)
+	fill(keys, start+fullWindowBuckets)
+	runtime.GC()
+	return c, start + 2*fullWindowBuckets - 1
+}
+
+// BenchmarkGetFullWindowKeys measures Get on keys that fill a long window, on
+// the two reads the O(1) check of the oldest buckets cannot settle: keys last
+// written three seconds before the high-water mark (three expired buckets, so
+// the read looks for the first live one), and keys idle for a whole window
+// (every bucket expired). The cache is built once for both, outside the
+// sub-benchmarks, because the framework calls a sub-benchmark again for every
+// b.N it tries.
+func BenchmarkGetFullWindowKeys(b *testing.B) {
+	keySet := makeKeys(2 * fullWindowKeys)
+	lagging, idle := keySet[:fullWindowKeys], keySet[fullWindowKeys:]
+	c, last := fullWindowCache(b, idle, lagging)
+	mark := last + 3
+	c.Store(mark, "mark")
+
+	for _, tc := range []struct {
+		name string
+		keys []string
+	}{
+		{"lagging", lagging},
+		{"idle", idle},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := range b.N {
+				c.Get(mark, tc.keys[i%len(tc.keys)])
+			}
+		})
+	}
+}
+
+// BenchmarkStoreFullWindowKeys measures Store on keys that fill a long window,
+// on the two writes that look a bucket up in the key's array: a client that
+// ships three seconds of events per key at a time (the first store of each
+// batch finds three buckets expired), and events repeated into seconds the keys
+// already hold, anywhere in the window (out of order). The cache is shared by
+// both and built once, as in BenchmarkGetFullWindowKeys; the batched writes
+// carry on from wherever the previous run stopped.
+func BenchmarkStoreFullWindowKeys(b *testing.B) {
+	keys := makeKeys(fullWindowKeys)
+	c, last := fullWindowCache(b, nil, keys)
+	jitter := makeJitter(4096)
+
+	b.Run("out-of-order", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := range b.N {
+			c.Store(last-1-jitter[i%len(jitter)]%(fullWindowBuckets-2), keys[i%len(keys)])
+		}
+	})
+	b.Run("batched", func(b *testing.B) {
+		const batch = 3
+		b.ReportAllocs()
+		key := len(keys) - 1
+		for i := range b.N {
+			slot := int64(i % batch)
+			if slot == 0 {
+				key++
+			}
+			if key == len(keys) {
+				key = 0
+				last += batch
+			}
+			c.Store(last-(batch-1)+slot, keys[key])
+		}
+	})
+}
