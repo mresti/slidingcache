@@ -527,8 +527,8 @@ func BenchmarkStoreSteadyStateWithSkew(b *testing.B) {
 
 // fullWindowKeys and fullWindowBuckets shape the full-window benchmarks: sets of
 // keys written every second of a 30-minute window of one-second buckets, so each
-// key holds 1,800 buckets and settles in the 16 KiB array class, and each set's
-// arrays (about 160 MB) are far larger than the CPU caches.
+// key holds 1,800 buckets and settles in the 8 KiB array class, and each set's
+// arrays (about 80 MB) are far larger than the CPU caches.
 const (
 	fullWindowKeys    = 10_000
 	fullWindowBuckets = 1800

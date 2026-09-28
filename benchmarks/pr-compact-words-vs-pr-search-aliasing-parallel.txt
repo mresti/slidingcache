@@ -1,0 +1,37 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/mresti/slidingcache
+cpu: Apple M2
+                                 │ benchmarks/pr-search-aliasing-parallel.txt │ benchmarks/pr-compact-words-parallel.txt │
+                                 │                   sec/op                   │      sec/op       vs base                │
+ParallelGet-4                                                    13.06n ± 20%       13.19n ± 21%   +1.03% (p=0.050 n=10)
+ParallelMixed-4                                                  12.90n ±  3%       12.98n ±  2%        ~ (p=0.117 n=10)
+ParallelStore-4                                                  16.20n ± 18%       13.55n ± 12%        ~ (p=0.109 n=10)
+ParallelStoreShards/shards=16-4                                  14.76n ± 10%       14.24n ±  5%        ~ (p=0.287 n=10)
+ParallelStoreShards/shards=64-4                                  13.62n ±  0%       15.02n ±  3%  +10.24% (p=0.001 n=10)
+ParallelStoreShards/shards=256-4                                 13.85n ±  1%       14.39n ±  1%   +3.94% (p=0.000 n=10)
+geomean                                                          14.02n             13.88n         -1.03%
+
+                                 │ benchmarks/pr-search-aliasing-parallel.txt │ benchmarks/pr-compact-words-parallel.txt │
+                                 │                    B/op                    │      B/op        vs base                 │
+ParallelGet-4                                                    0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelMixed-4                                                  0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStore-4                                                  0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=16-4                                  0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=64-4                                  0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=256-4                                 0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                     ²                    +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                 │ benchmarks/pr-search-aliasing-parallel.txt │ benchmarks/pr-compact-words-parallel.txt │
+                                 │                 allocs/op                  │    allocs/op     vs base                 │
+ParallelGet-4                                                    0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelMixed-4                                                  0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStore-4                                                  0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=16-4                                  0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=64-4                                  0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=256-4                                 0.000 ± 0%          0.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                     ²                    +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
