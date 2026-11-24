@@ -76,3 +76,62 @@ go test -run '^$' -bench '^Benchmark(HighWater|Stats)$' -benchmem -cpu=1 .
 
 Baseline machine: Apple M2 (8 cores), go1.27.0, darwin/arm64. Re-run the baseline
 on the production host before comparing absolute figures.
+
+## countminsketch
+
+| File | What it is |
+|---|---|
+| `countminsketch-phase3-serial.txt` | serial benchmarks of `./countminsketch` (-count=10 -cpu=1) after shards, the flat ring and the memory cap |
+| `countminsketch-phase3-parallel.txt` | parallel benchmarks of `./countminsketch` (-count=10 -cpu=4), same commit |
+
+The package's benchmarks mirror the root ones and run both implementations
+through the `SlidingCache` interface: every mirrored row has an `impl=exact` and
+an `impl=sketch` arm, so one file compares the two and needs no baseline. The
+files come from the same two commands as the root archive, pointed at the
+package, under the same two header lines:
+```
+go test -run '^$' -bench '^Benchmark(Store|Get|Sweep|Memory)' -benchmem -count=10 -cpu=1 ./countminsketch
+go test -run '^$' -bench '^BenchmarkParallel' -benchmem -count=10 -cpu=4 ./countminsketch
+```
+Gates: 0 allocs/op on every `impl=sketch` row of Store and Get, and in
+`MemoryFootprint` a `heap-bytes` within 5% of `estimate-bytes` that does not move
+with the number of keys.
+
+Medians of the 10 runs, ns/op (default Epsilon and Delta, 2719x5 over 16 shards;
+1 h window at 1 s):
+
+| Benchmark | exact | sketch |
+|---|---|---|
+| `StoreDense` (1,000 events per bucket) | 62.1 | 35.6 |
+| `StoreHotKeyNanos` | 17.6 | 20.8 |
+| `StoreHotKeySameBucket` | 17.6 | 20.5 |
+| `GetHit` | 16.6 | 16.4 |
+| `GetHitManyKeys` | 27.7 | 16.7 |
+| `StoreLateReject` | 7.4 | 8.4 |
+| `StoreManyKeys` (a new bucket per op) | 33.6 | 765 |
+| `StoreSingleKey` (a new bucket per op) | 24.4 | 342 |
+| `StoreOutOfOrder` | 59.1 | 235 |
+| `ParallelStoreDense` | 21.7 | 21.8 |
+| `ParallelGet` | 16.0 | 15.5 |
+| `ParallelMixed` | 12.7 | 43.6 |
+| `ParallelStore` (a new bucket per op) | 18.0 | 159 |
+
+- The sketch wins or ties where many events share a bucket and loses where each
+  op opens a new one: the first event a shard sees in a new bucket expires that
+  shard's oldest slot, 850 cells with these settings. `StoreHighWaterJump` prices
+  it at 338 ns per slot and 559 µs for a whole 1,800-slot window.
+- The cost does not depend on the number of buckets: `StoreWindowBuckets` dense
+  reads 34.0 ns with 60 buckets and 35.0 with 1,800. The sparse arms, 451 and
+  711 ns, differ by memory locality (a 3.3 MB ring against a 98 MB one), not by
+  the walk.
+- `ParallelStoreShards` on the sketch reads 159 / 145 / 241 ns at 16 / 64 / 256
+  shards: on this benchmark, which opens a new bucket per op, more shards stop
+  helping past 64. The cause was not profiled.
+- `MemoryFootprint`: 196,591,872 `heap-bytes` against 196,409,600
+  `estimate-bytes` (+0.09%), identical at 100K and 1M keys. Its 83 allocs/op are
+  `New`'s; no other sketch row allocates.
+- `ParallelGet/impl=exact` is bimodal in this file (13 to 18 ns).
+
+A first pair of runs was discarded: the machine was in interactive use and the
+`-cpu=4` rows of the exact arm read up to twice these figures. The archived runs
+were taken after that load was gone. Same machine as the baseline, go1.27.3.

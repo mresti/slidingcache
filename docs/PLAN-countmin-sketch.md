@@ -300,8 +300,9 @@ Pasos, cada uno con su gate:
 3. Benches espejo de los actuales en `countminsketch/cache_bench_test.go`, con el exacto como brazo de
    referencia (`impl=exact` / `impl=sketch`, los dos a través de la interface), más los propios del sketch
    (`StoreDense`, `ParallelStoreDense`, `StoreWindowBuckets`, `StoreHighWaterJump`). Gates: 0 allocs; RAM ==
-   estimación ±5% e independiente del nº de keys. **Pendiente:** archivar los resultados en `benchmarks/`
-   tras el commit del código (la cabecera nombra el commit medido).
+   estimación ±5% e independiente del nº de keys. **Archivado:**
+   `benchmarks/countminsketch-phase3-{serial,parallel}.txt`, medido sobre el commit 726e1c0 (lo nombra la
+   cabecera).
 4. `expireTo` recorre solo los buckets de `(applied, cutoff]`; sin slots vivos solo anota el cutoff; si la
    distancia cubre el anillo, lo recorre entero. Gate: coste independiente de B (B=60 vs B=1800 dentro de ±10%).
    **Hechos 3 y 4:** `make ci` verde en los dos toolchains (cobertura 98,6% / 98,2%); 6 targets de fuzz, 0
@@ -309,20 +310,20 @@ Pasos, cada uno con su gate:
    test de equivalencia del recorrido nuevo contra el recorrido completo (6 configuraciones, 4 semillas, 3000
    pasos); 21 mutantes a mano, 20 cazados, el otro solo cambia velocidad. Los 3 huecos del paso 1 cerrados.
 
-Resultados (M2, go1.27.3, mediana de 10; ε y shards por defecto: 2719×5 entre 16 shards, 1 h a 1 s; la
-última columna es de la ejecución anterior al paso 4, mediana de 5):
+Resultados (M2, go1.27.3, mediana de 10, del archivo de `benchmarks/`; ε y shards por defecto: 2719×5 entre
+16 shards, 1 h a 1 s; la última columna es de la ejecución anterior al paso 4, mediana de 5):
 
 | Benchmark | exacto | sketch | sketch antes del paso 4 |
 |---|---|---|---|
-| `StoreDense` (1000 eventos por bucket) | 61,7 ns | 35,4 ns | 60,0 ns |
-| `StoreHotKeyNanos` | 17,4 ns | 20,8 ns | 21,0 ns |
-| `StoreHotKeySameBucket` | 17,5 ns | 20,5 ns | 20,7 ns |
-| `GetHitManyKeys` | 27,8 ns | 16,7 ns | 16,7 ns |
-| `ParallelStoreDense` (4 CPU) | 21,5 ns | 21,9 ns | 27,4 ns |
-| `StoreManyKeys` (un bucket nuevo por op) | 33,2 ns | 744 ns | 3193 ns |
-| `StoreSingleKey` (un bucket nuevo por op) | 24,4 ns | 340 ns | 1933 ns |
-| `ParallelStore` (4 CPU, un bucket nuevo por op) | 18,0 ns | 160 ns | 1035 ns |
-| `ParallelMixed` (4 CPU) | 12,7 ns | 43,9 ns | 292 ns |
+| `StoreDense` (1000 eventos por bucket) | 62,1 ns | 35,6 ns | 60,0 ns |
+| `StoreHotKeyNanos` | 17,6 ns | 20,8 ns | 21,0 ns |
+| `StoreHotKeySameBucket` | 17,6 ns | 20,5 ns | 20,7 ns |
+| `GetHitManyKeys` | 27,7 ns | 16,7 ns | 16,7 ns |
+| `ParallelStoreDense` (4 CPU) | 21,7 ns | 21,8 ns | 27,4 ns |
+| `StoreManyKeys` (un bucket nuevo por op) | 33,6 ns | 765 ns | 3193 ns |
+| `StoreSingleKey` (un bucket nuevo por op) | 24,4 ns | 342 ns | 1933 ns |
+| `ParallelStore` (4 CPU, un bucket nuevo por op) | 18,0 ns | 159 ns | 1035 ns |
+| `ParallelMixed` (4 CPU) | 12,7 ns | 43,6 ns | 292 ns |
 
 - Objetivo `Store` <= 3× el exacto: se cumple desde ~110 eventos por bucket en toda la cache, no por
   debajo. Barrido medido (100K keys, 1 h a 1 s, ε por defecto), exacto / sketch en ns: 1 evento por bucket
@@ -330,9 +331,9 @@ Resultados (M2, go1.27.3, mediana de 10; ε y shards por defecto: 2719×5 entre 
   coste de caducar (~10 µs por bucket: 16 slots) se reparte entre los eventos del bucket y crece como 1/ε.
   **Re-alcance del objetivo original, aceptado el 2026-11-24.**
 - Peor caso, un bucket nuevo por operación: cada `Store` caduca un slot entero (850 celdas con 16 shards), 14× a
-  22× el exacto. Es el coste de caducar: `StoreHighWaterJump` da 338 ns por slot y 559 µs por una ventana
+  23× el exacto. Es el coste de caducar: `StoreHighWaterJump` da 338 ns por slot y 559 µs por una ventana
   entera de 1800 slots, una vez por shard.
-- Coste independiente de B: 34,2 ns (60 buckets) y 34,8 ns (1800), denso. En disperso, 448 y 707 ns: es
+- Coste independiente de B: 34,0 ns (60 buckets) y 35,0 ns (1800), denso. En disperso, 451 y 711 ns: es
   localidad de memoria (anillo de 3,3 MB frente a 98 MB), no el algoritmo; con un anillo que cabe en caché en
   los dos casos (ε=0,02) sale 114 y 119 ns.
 - RAM: 196.591.872 B medidos frente a 196.409.600 B estimados (+0,09%), igual con 100K y con 1M de keys.
