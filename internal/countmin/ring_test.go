@@ -1,6 +1,7 @@
 package countmin
 
 import (
+	"fmt"
 	"math"
 	"math/rand/v2"
 	"slices"
@@ -119,59 +120,91 @@ func TestRingAddReturnsTheUpdatedEstimate(t *testing.T) {
 	}
 }
 
+// TestRingSingleKeyGrowsByOnePerAdd runs on both sides of the unrolled depth 5
+// and at MaxDepth: every row of a lone key, in the slots and the aggregate,
+// holds its count.
 func TestRingSingleKeyGrowsByOnePerAdd(t *testing.T) {
-	const width, depth = 64, 5
-	r := mustRing(t, width, depth, 2)
-	h := splitmix64(42)
-	for want := uint64(1); want <= 10; want++ {
-		estimate, _ := r.Add(int(want%2), h)
-		if estimate != want {
-			t.Fatalf("estimate after %d adds = %d", want, estimate)
-		}
-	}
-	for slot := range r.Slots() {
-		cells := r.AppendSlotCells(nil, slot)
-		for _, j := range cellIndexes(h, width, depth) {
-			if cells[j] != 5 {
-				t.Fatalf("slot %d cell %d = %d, want 5", slot, j, cells[j])
+	for _, depth := range []int{4, 5, 6, MaxDepth} {
+		t.Run(fmt.Sprintf("depth=%d", depth), func(t *testing.T) {
+			const width = 64
+			r := mustRing(t, width, depth, 2)
+			h := splitmix64(42)
+			for want := uint64(1); want <= 10; want++ {
+				estimate, _ := r.Add(int(want%2), h)
+				if estimate != want || r.Count(h) != want {
+					t.Fatalf("estimate after %d adds = %d, Count = %d", want, estimate, r.Count(h))
+				}
 			}
-		}
+			aggregate := r.AppendAggregateCells(nil)
+			for row, j := range cellIndexes(h, width, depth) {
+				for slot := range r.Slots() {
+					if got := r.AppendSlotCells(nil, slot)[j]; got != 5 {
+						t.Fatalf("row %d: slot %d cell = %d, want 5", row, slot, got)
+					}
+				}
+				if aggregate[j] != 10 {
+					t.Fatalf("row %d: aggregate cell = %d, want 10", row, aggregate[j])
+				}
+			}
+		})
 	}
 }
 
 // TestRingAddSaturatesOnlyAtTheSlotMinimum plants h's cells in one slot, over
 // another slot that adds 7 to each aggregate cell, and checks that saturation
-// is decided by the smallest of h's slot cells alone.
+// is decided by the smallest of h's slot cells alone. The depth is the length
+// of planted.
 func TestRingAddSaturatesOnlyAtTheSlotMinimum(t *testing.T) {
-	const width, depth, slot, below = 16, 3, 1, 7
+	const width, slot, below = 16, 1, 7
 	const top = math.MaxUint32
 	tests := []struct {
 		name          string
-		planted, want [depth]uint32
+		planted, want []uint32
 		saturated     bool
 	}{
 		{
-			name:    "minimum one below the top is raised",
-			planted: [depth]uint32{top - 1, top - 1, top},
-			want:    [depth]uint32{top, top, top},
+			name:    "depth 3: minimum one below the top is raised",
+			planted: []uint32{top - 1, top - 1, top},
+			want:    []uint32{top, top, top},
 		},
 		{
-			name:      "minimum at the top moves nothing",
-			planted:   [depth]uint32{top, top, top},
-			want:      [depth]uint32{top, top, top},
+			name:      "depth 3: minimum at the top moves nothing",
+			planted:   []uint32{top, top, top},
+			want:      []uint32{top, top, top},
 			saturated: true,
 		},
 		{
-			name:    "a row at the top above a lower minimum",
-			planted: [depth]uint32{top, 5, 6},
-			want:    [depth]uint32{top, 6, 6},
+			name:    "depth 3: a row at the top above a lower minimum",
+			planted: []uint32{top, 5, 6},
+			want:    []uint32{top, 6, 6},
+		},
+		{
+			name:    "depth 5: minimum one below the top is raised",
+			planted: []uint32{top, top - 1, top, top - 1, top - 1},
+			want:    []uint32{top, top, top, top, top},
+		},
+		{
+			name:      "depth 5: minimum at the top moves nothing",
+			planted:   []uint32{top, top, top, top, top},
+			want:      []uint32{top, top, top, top, top},
+			saturated: true,
+		},
+		{
+			name:    "depth 5: a row at the top above a lower minimum",
+			planted: []uint32{5, 6, top, 7, 5},
+			want:    []uint32{6, 6, top, 7, 6},
+		},
+		{
+			name:    "depth 6: the minimum below the top only in the sixth row",
+			planted: []uint32{top, top, top, top, top, 5},
+			want:    []uint32{top, top, top, top, top, 6},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := mustRing(t, width, depth, 2)
+			r := mustRing(t, width, len(tt.planted), 2)
 			h := splitmix64(99)
-			rows := cellIndexes(h, width, depth)
+			rows := cellIndexes(h, width, len(tt.planted))
 			for i, j := range rows {
 				plantSlotCell(r, 0, j, below)
 				plantSlotCell(r, slot, j, tt.planted[i])
@@ -187,6 +220,9 @@ func TestRingAddSaturatesOnlyAtTheSlotMinimum(t *testing.T) {
 				if got := *slotCell(r, slot, j); got != tt.want[i] {
 					t.Fatalf("row %d slot cell = %d, want %d", i, got, tt.want[i])
 				}
+				if got := r.agg[j]; got != uint64(tt.want[i])+below {
+					t.Fatalf("row %d aggregate cell = %d, want %d", i, got, uint64(tt.want[i])+below)
+				}
 				wantEstimate = min(wantEstimate, uint64(tt.want[i])+below)
 			}
 			if estimate != wantEstimate || r.Count(h) != wantEstimate {
@@ -198,30 +234,42 @@ func TestRingAddSaturatesOnlyAtTheSlotMinimum(t *testing.T) {
 }
 
 // TestRingAddRaisesTheLastCountBeforeSaturation pins the boundary of
-// saturation: a slot cell one below the maximum still takes the event, mirrored
-// in the aggregate, and only the next Add finds it saturated.
+// saturation: slot cells one below the maximum still take the event, mirrored
+// in the aggregate, and only the next Add finds them saturated.
 func TestRingAddRaisesTheLastCountBeforeSaturation(t *testing.T) {
-	const width, depth, slot = 16, 1, 1
-	r := mustRing(t, width, depth, 2)
-	h := splitmix64(7)
-	cell := cellIndexes(h, width, depth)[0]
-	*slotCell(r, slot, cell) = math.MaxUint32 - 1
-	r.agg[cell] = math.MaxUint32 - 1
+	for _, depth := range []int{1, 5} {
+		t.Run(fmt.Sprintf("depth=%d", depth), func(t *testing.T) {
+			const width, slot = 16, 1
+			const top = math.MaxUint32
+			r := mustRing(t, width, depth, 2)
+			h := splitmix64(7)
+			rows := cellIndexes(h, width, depth)
+			for _, j := range rows {
+				plantSlotCell(r, slot, j, top-1)
+			}
 
-	if estimate, saturated := r.Add(slot, h); saturated || estimate != math.MaxUint32 {
-		t.Fatalf("Add at MaxUint32-1 = (%d, %t), want (%d, false)", estimate, saturated, uint64(math.MaxUint32))
-	}
-	if *slotCell(r, slot, cell) != math.MaxUint32 {
-		t.Fatalf("slot cell = %d after the last raise, want %d", *slotCell(r, slot, cell), uint64(math.MaxUint32))
-	}
+			if estimate, saturated := r.Add(slot, h); saturated || estimate != top {
+				t.Fatalf("Add at MaxUint32-1 = (%d, %t), want (%d, false)", estimate, saturated, uint64(top))
+			}
+			requireCellsAtTop(t, "after the last raise", r, slot, rows)
 
-	if estimate, saturated := r.Add(slot, h); !saturated || estimate != math.MaxUint32 {
-		t.Fatalf("Add at MaxUint32 = (%d, %t), want (%d, true)", estimate, saturated, uint64(math.MaxUint32))
+			if estimate, saturated := r.Add(slot, h); !saturated || estimate != top {
+				t.Fatalf("Add at MaxUint32 = (%d, %t), want (%d, true)", estimate, saturated, uint64(top))
+			}
+			requireCellsAtTop(t, "after a saturated Add", r, slot, rows)
+			assertAggregateIsSumOfSlots(t, r)
+		})
 	}
-	if *slotCell(r, slot, cell) != math.MaxUint32 || r.agg[cell] != math.MaxUint32 {
-		t.Fatalf("saturated Add moved the cells: slot %d, aggregate %d", *slotCell(r, slot, cell), r.agg[cell])
+}
+
+func requireCellsAtTop(t *testing.T, step string, r *Ring, slot int, rows []uint64) {
+	t.Helper()
+	for i, j := range rows {
+		if *slotCell(r, slot, j) != math.MaxUint32 || r.agg[j] != math.MaxUint32 {
+			t.Fatalf("%s: row %d is %d in the slot and %d in the aggregate, want %d in both",
+				step, i, *slotCell(r, slot, j), r.agg[j], uint64(math.MaxUint32))
+		}
 	}
-	assertAggregateIsSumOfSlots(t, r)
 }
 
 func TestRingExpireUndoesTheAddsOfItsSlot(t *testing.T) {

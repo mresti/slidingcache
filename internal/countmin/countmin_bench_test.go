@@ -7,11 +7,13 @@ import (
 )
 
 // The sizes span a sketch that fits in L1, the 2719x5 of epsilon 0.001 and delta
-// 0.01 that the Phase 1 gate is measured at, and one that spills out of L2.
+// 0.01 that the Phase 1 gate is measured at, and one that spills out of L2. The
+// 2719x7 of delta 0.001 measures a depth that Ring.Add has no fast path for.
 var benchSizes = []struct{ width, depth int }{
 	{22, 5},
 	{2719, 5},
 	{271829, 5},
+	{2719, 7},
 }
 
 const (

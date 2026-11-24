@@ -1,0 +1,61 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/mresti/slidingcache/countminsketch
+cpu: Apple M2
+                                             │ benchmarks/countminsketch-phase5-parallel.txt │ benchmarks/countminsketch-depth5-parallel.txt │
+                                             │                    sec/op                     │         sec/op          vs base               │
+ParallelGet/impl=exact-4                                                        12.90n ±  2%             14.08n ± 14%  +9.15% (p=0.005 n=10)
+ParallelGet/impl=sketch-4                                                       15.49n ±  0%             15.63n ±  3%  +0.90% (p=0.012 n=10)
+ParallelMixed/impl=exact-4                                                      12.76n ±  1%             13.07n ±  2%  +2.47% (p=0.009 n=10)
+ParallelMixed/impl=sketch-4                                                     44.37n ±  2%             44.62n ±  2%       ~ (p=0.280 n=10)
+ParallelStore/impl=exact-4                                                      18.00n ±  0%             17.99n ± 13%       ~ (p=0.897 n=10)
+ParallelStore/impl=sketch-4                                                     161.2n ±  0%             161.4n ±  1%       ~ (p=0.897 n=10)
+ParallelStoreShards/shards=16/impl=exact-4                                      18.00n ±  0%             17.96n ± 15%       ~ (p=0.063 n=10)
+ParallelStoreShards/shards=16/impl=sketch-4                                     161.9n ±  0%             165.3n ±  2%  +2.07% (p=0.005 n=10)
+ParallelStoreShards/shards=64/impl=exact-4                                      14.79n ±  8%             15.34n ± 12%       ~ (p=0.853 n=10)
+ParallelStoreShards/shards=64/impl=sketch-4                                     144.1n ±  1%             145.6n ±  1%  +1.08% (p=0.009 n=10)
+ParallelStoreShards/shards=256/impl=exact-4                                     13.59n ±  4%             13.67n ±  1%       ~ (p=0.697 n=10)
+ParallelStoreShards/shards=256/impl=sketch-4                                    242.3n ±  0%             241.6n ±  0%  -0.31% (p=0.001 n=10)
+ParallelStoreDense/impl=exact-4                                                 21.52n ± 19%             21.50n ± 21%       ~ (p=0.492 n=10)
+ParallelStoreDense/impl=sketch-4                                                23.45n ± 10%             22.09n ±  6%       ~ (p=0.101 n=10)
+geomean                                                                         34.50n                   34.84n        +0.96%
+
+                                             │ benchmarks/countminsketch-phase5-parallel.txt │ benchmarks/countminsketch-depth5-parallel.txt │
+                                             │                     B/op                      │         B/op          vs base                 │
+ParallelGet/impl=exact-4                                                        0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelGet/impl=sketch-4                                                       0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelMixed/impl=exact-4                                                      0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelMixed/impl=sketch-4                                                     0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStore/impl=exact-4                                                      0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStore/impl=sketch-4                                                     0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=16/impl=exact-4                                      0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=16/impl=sketch-4                                     0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=64/impl=exact-4                                      0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=64/impl=sketch-4                                     0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=256/impl=exact-4                                     0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=256/impl=sketch-4                                    0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreDense/impl=exact-4                                                 4.000 ± 0%               4.000 ± 0%       ~ (p=1.000 n=10)
+ParallelStoreDense/impl=sketch-4                                                0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                                    ²                         +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                             │ benchmarks/countminsketch-phase5-parallel.txt │ benchmarks/countminsketch-depth5-parallel.txt │
+                                             │                   allocs/op                   │      allocs/op        vs base                 │
+ParallelGet/impl=exact-4                                                        0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelGet/impl=sketch-4                                                       0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelMixed/impl=exact-4                                                      0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelMixed/impl=sketch-4                                                     0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStore/impl=exact-4                                                      0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStore/impl=sketch-4                                                     0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=16/impl=exact-4                                      0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=16/impl=sketch-4                                     0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=64/impl=exact-4                                      0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=64/impl=sketch-4                                     0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=256/impl=exact-4                                     0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreShards/shards=256/impl=sketch-4                                    0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreDense/impl=exact-4                                                 0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+ParallelStoreDense/impl=sketch-4                                                0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                                    ²                         +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean

@@ -1,6 +1,7 @@
 package countminsketch
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/mresti/slidingcache/internal/countmin"
@@ -33,13 +34,20 @@ func cellsOf(t *testing.T, width, depth int, h uint64) []int {
 // row.
 func hashSharingOnlyRow(t *testing.T, width, depth int, partner uint64, row int) uint64 {
 	t.Helper()
+	return hashSharingRows(t, width, depth, partner, func(r int) bool { return r == row })
+}
+
+// hashSharingRows returns the first splitmix64 hash, searching from id 1000 on,
+// whose cell is partner's in exactly the rows for which shared is true.
+func hashSharingRows(t *testing.T, width, depth int, partner uint64, shared func(row int) bool) uint64 {
+	t.Helper()
 	want := cellsOf(t, width, depth, partner)
 	for id := uint64(1000); id < 100_000; id++ {
 		h := splitmix64(id)
 		got := cellsOf(t, width, depth, h)
 		matches := true
 		for r := range depth {
-			if (got[r] == want[r]) != (r == row) {
+			if (got[r] == want[r]) != shared(r) {
 				matches = false
 				break
 			}
@@ -48,44 +56,54 @@ func hashSharingOnlyRow(t *testing.T, width, depth int, partner uint64, row int)
 			return h
 		}
 	}
-	t.Fatalf("no hash shares only row %d with %#x at %dx%d", row, partner, width, depth)
+	t.Fatalf("no hash shares the wanted rows with %#x at %dx%d", partner, width, depth)
 	return 0
 }
 
 // TestStoreCanReturnTheSameCountTwice pins the consequence of the conservative
 // update: a Store raises only the rows at the minimum of its bucket's slot, so
 // when the key's smallest window cell is in a row that is not raised, the
-// returned count does not move. On one shard of 4 x 2, z is hot in an older
-// bucket and shares x's row 1; y is hot in the current bucket and shares x's
-// row 0. Each Store of x raises only row 1 of the current slot, while the
-// window estimate is row 0, held at y's 5.
+// returned count does not move. On one shard of 4 columns, z is hot in an
+// older bucket and shares every row of x but row 0; y is hot in the current
+// bucket and shares x's row 0 only. Each Store of x raises every row but row 0
+// of the current slot, while the window estimate is row 0, held at y's 5. The
+// classic update, or a minimum read from the window instead of the slot,
+// would raise row 0 too. Depth 5 is the default Delta's, which Ring.Add
+// unrolls.
 func TestStoreCanReturnTheSameCountTwice(t *testing.T) {
-	cfg := secondsConfig(0)
-	cfg.Shards, cfg.Epsilon, cfg.Delta = 1, 0.9, 0.2
-	layout := mustLayout(t, cfg)
-	if layout.shards != 1 || layout.shardWidth != 4 || layout.depth != 2 {
-		t.Fatalf("layout %+v, want one shard of 4 x 2", layout)
-	}
-	x := splitmix64(1)
-	hashes := map[string]uint64{
-		"x": x,
-		"y": hashSharingOnlyRow(t, layout.shardWidth, layout.depth, x, 0),
-		"z": hashSharingOnlyRow(t, layout.shardWidth, layout.depth, x, 1),
-	}
-	c := newTestCache(t, cfg, WithHashFunc(func(key string) uint64 { return hashes[key] }))
-	const older, current = 1_000, 1_010
-	for range 5 {
-		c.Store(older, "z")
-		c.Store(current, "y")
-	}
+	for _, tt := range []struct {
+		delta float64
+		depth int
+	}{{0.2, 2}, {0.01, 5}} {
+		t.Run(fmt.Sprintf("depth=%d", tt.depth), func(t *testing.T) {
+			cfg := secondsConfig(0)
+			cfg.Shards, cfg.Epsilon, cfg.Delta = 1, 0.9, tt.delta
+			layout := mustLayout(t, cfg)
+			if layout.shards != 1 || layout.shardWidth != 4 || layout.depth != tt.depth {
+				t.Fatalf("layout %+v, want one shard of 4 x %d", layout, tt.depth)
+			}
+			x := splitmix64(1)
+			hashes := map[string]uint64{
+				"x": x,
+				"y": hashSharingOnlyRow(t, layout.shardWidth, layout.depth, x, 0),
+				"z": hashSharingRows(t, layout.shardWidth, layout.depth, x, func(row int) bool { return row != 0 }),
+			}
+			c := newTestCache(t, cfg, WithHashFunc(func(key string) uint64 { return hashes[key] }))
+			const older, current = 1_000, 1_010
+			for range 5 {
+				c.Store(older, "z")
+				c.Store(current, "y")
+			}
 
-	first, second := c.Store(current, "x"), c.Store(current, "x")
+			first, second := c.Store(current, "x"), c.Store(current, "x")
 
-	if first != 5 || second != 5 {
-		t.Fatalf("two Stores of x returned %d and %d, want 5 and 5", first, second)
-	}
-	if got := c.Get(current, "x"); got != 5 {
-		t.Fatalf("Get(x) = %d, want 5", got)
+			if first != 5 || second != 5 {
+				t.Fatalf("two Stores of x returned %d and %d, want 5 and 5", first, second)
+			}
+			if got := c.Get(current, "x"); got != 5 {
+				t.Fatalf("Get(x) = %d, want 5", got)
+			}
+		})
 	}
 }
 

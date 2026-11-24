@@ -5,6 +5,7 @@ import "testing"
 func TestHotPathsDoNotAllocate(t *testing.T) {
 	s := mustSketch(t, 2719, 5)
 	r := mustRing(t, 2719, 5, 8)
+	r7 := mustRing(t, 2719, 7, 8)
 	item := []byte("00000000000000000042")
 	h := splitmix64(42)
 	var sink uint64
@@ -18,6 +19,7 @@ func TestHotPathsDoNotAllocate(t *testing.T) {
 		"Sketch.CountHash": func() { sink += s.CountHash(h) },
 		"Sketch.Reset":     func() { s.Reset() },
 		"Ring.Add":         func() { estimate, _ := r.Add(3, h); sink += estimate },
+		"Ring.Add depth 7": func() { estimate, _ := r7.Add(3, h); sink += estimate },
 		"Ring.Count":       func() { sink += r.Count(h) },
 		"Ring.Expire":      func() { r.Expire(3) },
 		"Ring.Reset":       func() { r.Reset() },

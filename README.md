@@ -681,14 +681,14 @@ the lifetime of the cache, and it is called on rejected events too.
 ### Cost
 
 Measured on an Apple M2, default `Epsilon` and `Shards`, 1 h window at 1 s
-(`benchmarks/countminsketch-phase5-*.txt`):
+(`benchmarks/countminsketch-depth5-*.txt`):
 
 | | Exact | `countminsketch` |
 |---|---|---|
-| `Store`, 1,000 events per bucket (`StoreDense`) | 59.2 ns | 40.2 ns |
-| `Store`, one hot key (`StoreHotKeyNanos`, 5 min window) | 17.5 ns | 24.9 ns |
-| `Get`, many keys (`GetHitManyKeys`) | 27.9 ns | 16.6 ns |
-| `Store`, a new bucket on every call (`StoreManyKeys`) | 33.6 ns | 760 ns |
+| `Store`, 1,000 events per bucket (`StoreDense`) | 59.7 ns | 34.2 ns |
+| `Store`, one hot key (`StoreHotKeyNanos`, 5 min window) | 17.4 ns | 20.1 ns |
+| `Get`, many keys (`GetHitManyKeys`) | 28.0 ns | 16.6 ns |
+| `Store`, a new bucket on every call (`StoreManyKeys`) | 33.4 ns | 742 ns |
 
 The last row is the worst case. The first event a shard sees in a new bucket
 expires that shard's oldest slot, which adds up to about 9 µs per bucket once
@@ -698,21 +698,25 @@ events of all keys together:
 
 | Events per bucket | Exact | `countminsketch` |
 |---|---|---|
-| 1 | 34 ns | 752 ns |
-| 10 | 33 ns | 469 ns |
-| 30 | 36 ns | 280 ns |
-| 100 | 36 ns | 123 ns |
-| 300 | 42 ns | 62 ns |
-| 1,000 | 62 ns | 40 ns |
-| 10,000 | 70 ns | 32 ns |
+| 1 | 34 ns | 747 ns |
+| 10 | 34 ns | 462 ns |
+| 30 | 36 ns | 271 ns |
+| 100 | 36 ns | 116 ns |
+| 300 | 44 ns | 56 ns |
+| 1,000 | 61 ns | 34 ns |
+| 10,000 | 70 ns | 26 ns |
 
 The 1,000 row is the workload of `StoreDense` above; the exact cache reads 59
 to 62 ns on it from run to run. The sketch is within 3× of the exact cache from
-about 120 events per bucket and faster from about 550. An expiry clears `width × depth` counters, so those
+about 110 events per bucket and faster from about 450. An expiry clears `width × depth` counters, so those
 thresholds move with `1 / Epsilon`.
 
 A jump of the high-water mark expires one slot per bucket skipped, at most the
 whole window: about 0.6 ms per shard for 1,800 buckets.
+
+These figures are for the default `Delta`, 5 rows, which has a dedicated form of
+the update. Other values of `Delta` use a generic form that measured 4 to 6 ns
+more per `Store` at 5 rows.
 
 ## Testing
 

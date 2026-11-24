@@ -204,3 +204,34 @@ Medians, ns/op, sketch arm (the exact arm did not change):
   faster from about 550 (about 110 and 450 before the conservative update).
 - `StoreDense/impl=exact` and `StoreDensity/events=1000/impl=exact` spread 16%
   in this file; their medians, 59.2 and 61.8, are the same workload.
+
+`countminsketch-depth5-{serial,parallel}.txt` are the archive after `Ring.Add`
+gained a straight-line path for depth 5, the default, and
+`countminsketch-depth5-vs-baseline-{serial,parallel}.txt` their benchstat
+comparison with the Phase 5 archive:
+```
+make test-bench-save PR=countminsketch-depth5 PKG=./countminsketch BASELINE=benchmarks/countminsketch-phase5
+```
+Medians, ns/op, sketch arm:
+
+| Benchmark | phase 3 (classic) | phase 5 | depth-5 path | exact |
+|---|---|---|---|---|
+| `StoreDense` | 35.6 | 40.2 | 34.2 | 59.7 |
+| `StoreMediumCardinalitySameBucket/keys=10000` | 25.5 | 31.2 | 25.1 | 27.4 |
+| `StoreHotKeyNanos` | 20.8 | 24.9 | 20.1 | 17.4 |
+| `StoreHotKeySameBucket` | 20.5 | 24.8 | 19.9 | 17.5 |
+| `StoreWindowBuckets/buckets=1800/density=dense` | 35.0 | 39.7 | 34.6 | n/a |
+| `StoreManyKeys` | 765 | 760 | 742 | 33.4 |
+| `GetHitManyKeys` | 16.7 | 16.6 | 16.6 | 28.0 |
+| `ParallelStoreDense` | 21.8 | 23.5 | 22.1 | 21.5 |
+
+- The conservative update no longer costs anything measurable at the default
+  depth: every serial row is back at, or slightly under, its Phase 3 figure, and
+  `ParallelStoreDense` is within its 11% spread of it.
+- `StoreDensity`, exact / sketch: 1 event per bucket 34.0 / 747; 10: 33.6 / 462;
+  30: 36.0 / 271; 100: 36.4 / 116; 300: 43.7 / 55.8; 1,000: 60.8 / 34.4; 10,000:
+  69.9 / 26.2. The sketch is within 3x of the exact cache from about 110 events
+  per bucket and faster from about 450, as before the conservative update.
+- Every benchmark of this package runs at depth 5. Other depths take the generic
+  path, whose only rows are `RingAdd` at 2719x7 in `internal/countmin` (not
+  archived): 16.8 ns before this change and 17.1 after, the cost of one call.

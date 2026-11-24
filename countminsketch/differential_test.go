@@ -116,10 +116,11 @@ func FuzzExactAgreesWithOracle(f *testing.F) {
 
 // fuzzDepths are the sketch depths a fuzzed byte selects among in Mode B, and
 // fuzzDepthDeltas the Delta giving each, ceil(ln(1/Delta)) rows. One row makes
-// the conservative update the classic one; two and three rows exercise it.
+// the conservative update the classic one; two and three rows exercise it, and
+// five, the depth of the default Delta 0.01, its unrolled form.
 var (
-	fuzzDepths      = [...]int{1, 2, 3}
-	fuzzDepthDeltas = [...]float64{0.9, 0.2, 0.06}
+	fuzzDepths      = [...]int{1, 2, 3, 5}
+	fuzzDepthDeltas = [...]float64{0.9, 0.2, 0.06, 0.01}
 )
 
 func foldDepth(b byte) int {
@@ -135,7 +136,7 @@ func addForEveryShardCountAndDepth(f *testing.F, seed func(shards, depth byte) [
 }
 
 // FuzzCollisionsBoundedByOracle is Mode B: the narrowest sketch New accepts,
-// at 1, 2 or 3 rows, with the default hash, so collisions are frequent: the
+// at 1, 2, 3 or 5 rows, with the default hash, so collisions are frequent: the
 // rule with one shard of 4 columns, common with 8 columns per shard.
 // Rejections must still be identical and every count between root's and the
 // classic estimate of the live events.
@@ -162,7 +163,7 @@ func FuzzCollisionsBoundedByOracle(f *testing.F) {
 // older buckets, which then expire, is what a minimum read from the aggregate
 // instead of the slot undercounts. Which keys collide changes from run to run
 // with the default hash's random seed; over so many buckets some partial
-// collision is near certain at 2 and 3 rows.
+// collision is near certain at 2, 3 and 5 rows.
 func slidingStores() []byte {
 	const buckets = 32
 	multiplicities := [len(testKeys)]int{3, 1, 2, 1}

@@ -1,6 +1,7 @@
 package countmin
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"slices"
 	"testing"
@@ -24,70 +25,119 @@ func requireCells[C uint32 | uint64](t *testing.T, step, what string, got, want 
 }
 
 // TestRingAddRaisesOnlyTheRowsAtTheSlotMinimum follows every cell of a slot
-// while x, which shares row 0 with y and no other row, is counted after y. The
-// rows at the minimum climb, in the slot and in the aggregate, while the row
-// above it waits; once they catch up, all of them move together.
+// while x, which shares one row with y and no other row, is counted after y.
+// The rows at the minimum climb, in the slot and in the aggregate, while the
+// shared row above it waits; once they catch up, all of them move together. At
+// depth 5 each row in turn is the shared one, which pins every row's index,
+// minimum and raise of the unrolled update; depths 4, 6 and MaxDepth pin the
+// generic update on both sides of it.
 func TestRingAddRaisesOnlyTheRowsAtTheSlotMinimum(t *testing.T) {
-	const width, depth, slot = 8, 3, 1
-	r := mustRing(t, width, depth, 2)
-	y := splitmix64(1)
-	x := hashSharingOnlyRow(t, y, width, depth, 0)
-	ys, xs := cellIndexes(y, width, depth), cellIndexes(x, width, depth)
-	r.Add(slot, y)
-	r.Add(slot, y)
-
-	steps := []struct {
-		name     string
-		x        [depth]uint32
-		estimate uint64
-	}{
-		{"first x: the rows at 0 rise, the shared row at 2 stays", [depth]uint32{2, 1, 1}, 1},
-		{"second x: the rows at 1 rise, the shared row at 2 stays", [depth]uint32{2, 2, 2}, 2},
-		{"third x: every row is at the minimum and rises", [depth]uint32{3, 3, 3}, 3},
+	cases := []struct{ depth, sharedRow int }{{3, 0}, {4, 3}, {6, 5}, {MaxDepth, MaxDepth - 1}}
+	for row := range 5 {
+		cases = append(cases, struct{ depth, sharedRow int }{5, row})
 	}
-	for _, s := range steps {
-		estimate, saturated := r.Add(slot, x)
+	for _, c := range cases {
+		t.Run(fmt.Sprintf("depth=%d/shared_row=%d", c.depth, c.sharedRow), func(t *testing.T) {
+			const width, slot = 8, 1
+			r := mustRing(t, width, c.depth, 2)
+			y := splitmix64(1)
+			x := hashSharingOnlyRow(t, y, width, c.depth, c.sharedRow)
+			ys, xs := cellIndexes(y, width, c.depth), cellIndexes(x, width, c.depth)
+			r.Add(slot, y)
+			r.Add(slot, y)
 
-		want := map[uint64]uint32{ys[1]: 2, ys[2]: 2}
-		for i, j := range xs {
-			want[j] = s.x[i]
-		}
-		requireCells(t, s.name, "slot", r.AppendSlotCells(nil, slot), cellsWith(width, depth, want))
-		wantAggregate := make(map[uint64]uint64, len(want))
-		for j, c := range want {
-			wantAggregate[j] = uint64(c)
-		}
-		requireCells(t, s.name, "aggregate", r.AppendAggregateCells(nil), cellsWith(width, depth, wantAggregate))
-		if estimate != s.estimate || saturated {
-			t.Fatalf("%s: Add = (%d, %t), want (%d, false)", s.name, estimate, saturated, s.estimate)
-		}
-		assertAggregateIsSumOfSlots(t, r)
-	}
-	if got := r.Count(y); got != 2 {
-		t.Fatalf("Count(y) = %d, want its 2 adds: y's own rows were never raised by x", got)
+			steps := []struct {
+				name           string
+				shared, others uint32
+				estimate       uint64
+			}{
+				{"first x: the rows at 0 rise, the shared row at 2 stays", 2, 1, 1},
+				{"second x: the rows at 1 rise, the shared row at 2 stays", 2, 2, 2},
+				{"third x: every row is at the minimum and rises", 3, 3, 3},
+			}
+			for _, s := range steps {
+				estimate, saturated := r.Add(slot, x)
+
+				want := make(map[uint64]uint32)
+				for i, j := range ys {
+					if i != c.sharedRow {
+						want[j] = 2
+					}
+				}
+				for i, j := range xs {
+					want[j] = s.others
+					if i == c.sharedRow {
+						want[j] = s.shared
+					}
+				}
+				requireSlotAndAggregate(t, s.name, r, slot, width, c.depth, want)
+				if estimate != s.estimate || saturated {
+					t.Fatalf("%s: Add = (%d, %t), want (%d, false)", s.name, estimate, saturated, s.estimate)
+				}
+				assertAggregateIsSumOfSlots(t, r)
+			}
+			if got := r.Count(y); got != 2 {
+				t.Fatalf("Count(y) = %d, want its 2 adds: y's own rows were never raised by x", got)
+			}
+		})
 	}
 }
 
-// TestRingAddFindsTheMinimumInTheLastRow is the case where the last row alone
-// holds the minimum: x shares row 0 of 2 with y, counted twice, so x's cells
-// are 2 and 0 and only row 1 may rise.
-func TestRingAddFindsTheMinimumInTheLastRow(t *testing.T) {
-	const width, depth, slot = 8, 2, 0
-	r := mustRing(t, width, depth, 1)
-	y := splitmix64(1)
-	x := hashSharingOnlyRow(t, y, width, depth, 0)
-	ys, xs := cellIndexes(y, width, depth), cellIndexes(x, width, depth)
-	r.Add(slot, y)
-	r.Add(slot, y)
-
-	if estimate, saturated := r.Add(slot, x); estimate != 1 || saturated {
-		t.Fatalf("Add(x) = (%d, %t), want (1, false)", estimate, saturated)
+// requireSlotAndAggregate checks every cell of a ring with a single non-empty
+// slot: that slot holds want, the aggregate the same counts, every other cell 0.
+func requireSlotAndAggregate(
+	t *testing.T, step string, r *Ring, slot int, width uint64, depth int, want map[uint64]uint32,
+) {
+	t.Helper()
+	requireCells(t, step, "slot", r.AppendSlotCells(nil, slot), cellsWith(width, depth, want))
+	wantAggregate := make(map[uint64]uint64, len(want))
+	for j, c := range want {
+		wantAggregate[j] = uint64(c)
 	}
-	requireCells(t, "x after y twice", "slot", r.AppendSlotCells(nil, slot),
-		cellsWith(width, depth, map[uint64]uint32{xs[0]: 2, xs[1]: 1, ys[1]: 2}))
-	requireCells(t, "x after y twice", "aggregate", r.AppendAggregateCells(nil),
-		cellsWith(width, depth, map[uint64]uint64{xs[0]: 2, xs[1]: 1, ys[1]: 2}))
-	assertAggregateIsSumOfSlots(t, r)
+	requireCells(t, step, "aggregate", r.AppendAggregateCells(nil), cellsWith(width, depth, wantAggregate))
+}
+
+// TestRingAddFindsTheMinimumInItsOnlyRow is the case where one row alone holds
+// the minimum: x shares every other row with y, counted twice, so x's cells are
+// 2 except a 0 in that row, and only that row may rise. At depth 5 each row in
+// turn, which pins every row's part in the minimum of the unrolled update; at
+// the other depths the last row, so a path that ignored rows past the fifth
+// would get the cells wrong. Narrower widths keep x easy to find when it must
+// share many rows.
+func TestRingAddFindsTheMinimumInItsOnlyRow(t *testing.T) {
+	type minimumCase struct {
+		width         uint64
+		depth, minRow int
+	}
+	cases := []minimumCase{{8, 2, 1}, {8, 4, 3}, {4, 6, 5}, {2, MaxDepth, MaxDepth - 1}}
+	for row := range 5 {
+		cases = append(cases, minimumCase{8, 5, row})
+	}
+	for _, c := range cases {
+		t.Run(fmt.Sprintf("%dx%d/minimum_row=%d", c.width, c.depth, c.minRow), func(t *testing.T) {
+			const slot = 0
+			width := c.width
+			r := mustRing(t, int(width), c.depth, 1)
+			y := splitmix64(1)
+			x := hashSharingRows(t, y, width, c.depth, func(row int) bool { return row != c.minRow })
+			ys, xs := cellIndexes(y, width, c.depth), cellIndexes(x, width, c.depth)
+			r.Add(slot, y)
+			r.Add(slot, y)
+
+			if estimate, saturated := r.Add(slot, x); estimate != 1 || saturated {
+				t.Fatalf("Add(x) = (%d, %t), want (1, false)", estimate, saturated)
+			}
+			want := map[uint64]uint32{ys[c.minRow]: 2}
+			for i, j := range xs {
+				want[j] = 2
+				if i == c.minRow {
+					want[j] = 1
+				}
+			}
+			requireSlotAndAggregate(t, "x after y twice", r, slot, width, c.depth, want)
+			assertAggregateIsSumOfSlots(t, r)
+		})
+	}
 }
 
 // TestRingAddTakesTheMinimumFromTheSlotNotTheAggregate is the case a minimum
@@ -96,31 +146,43 @@ func TestRingAddFindsTheMinimumInTheLastRow(t *testing.T) {
 // too, although the aggregate is already high there: once slot 0 expires that
 // row holds only what slot 1 put in it.
 func TestRingAddTakesTheMinimumFromTheSlotNotTheAggregate(t *testing.T) {
-	const width, depth = 8, 3
-	r := mustRing(t, width, depth, 2)
-	y := splitmix64(1)
-	x := hashSharingOnlyRow(t, y, width, depth, 0)
-	ys, xs := cellIndexes(y, width, depth), cellIndexes(x, width, depth)
-	for range 4 {
-		r.Add(0, y)
-	}
+	for _, depth := range []int{3, 5} {
+		t.Run(fmt.Sprintf("depth=%d", depth), func(t *testing.T) {
+			const width = 8
+			r := mustRing(t, width, depth, 2)
+			y := splitmix64(1)
+			x := hashSharingOnlyRow(t, y, width, depth, 0)
+			ys, xs := cellIndexes(y, width, depth), cellIndexes(x, width, depth)
+			for range 4 {
+				r.Add(0, y)
+			}
 
-	if estimate, _ := r.Add(1, x); estimate != 1 {
-		t.Fatalf("Add(x) = %d, want 1", estimate)
-	}
-	requireCells(t, "x in slot 1", "slot 1", r.AppendSlotCells(nil, 1),
-		cellsWith(width, depth, map[uint64]uint32{xs[0]: 1, xs[1]: 1, xs[2]: 1}))
-	requireCells(t, "x in slot 1", "aggregate", r.AppendAggregateCells(nil),
-		cellsWith(width, depth, map[uint64]uint64{ys[0]: 5, ys[1]: 4, ys[2]: 4, xs[1]: 1, xs[2]: 1}))
+			if estimate, _ := r.Add(1, x); estimate != 1 {
+				t.Fatalf("Add(x) = %d, want 1", estimate)
+			}
+			wantSlot1 := make(map[uint64]uint32)
+			wantAggregate := map[uint64]uint64{ys[0]: 5}
+			for i, j := range xs {
+				wantSlot1[j] = 1
+				if i > 0 {
+					wantAggregate[ys[i]] = 4
+					wantAggregate[j] = 1
+				}
+			}
+			requireCells(t, "x in slot 1", "slot 1",
+				r.AppendSlotCells(nil, 1), cellsWith(width, depth, wantSlot1))
+			requireCells(t, "x in slot 1", "aggregate",
+				r.AppendAggregateCells(nil), cellsWith(width, depth, wantAggregate))
 
-	r.Expire(0)
+			r.Expire(0)
 
-	requireCells(t, "slot 0 expired", "aggregate", r.AppendAggregateCells(nil),
-		cellsWith(width, depth, map[uint64]uint64{xs[0]: 1, xs[1]: 1, xs[2]: 1}))
-	if got := r.Count(x); got != 1 {
-		t.Fatalf("Count(x) after slot 0 expired = %d, want 1", got)
+			requireSlotAndAggregate(t, "slot 0 expired", r, 1, width, depth, wantSlot1)
+			if got := r.Count(x); got != 1 {
+				t.Fatalf("Count(x) after slot 0 expired = %d, want 1", got)
+			}
+			assertAggregateIsSumOfSlots(t, r)
+		})
 	}
-	assertAggregateIsSumOfSlots(t, r)
 }
 
 // overestimates feeds the same stream to a ring and to the classic reference,
