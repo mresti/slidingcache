@@ -226,7 +226,8 @@ Medians, ns/op, sketch arm:
 | `ParallelStoreDense` | 21.8 | 23.5 | 22.1 | 21.5 |
 
 - The conservative update no longer costs anything measurable at the default
-  depth: every row is back at, or slightly under, its Phase 3 figure.
+  depth: every serial row is back at, or slightly under, its Phase 3 figure, and
+  `ParallelStoreDense` is within its 11% spread of it.
 - `StoreDensity`, exact / sketch: 1 event per bucket 34.0 / 747; 10: 33.6 / 462;
   30: 36.0 / 271; 100: 36.4 / 116; 300: 43.7 / 55.8; 1,000: 60.8 / 34.4; 10,000:
   69.9 / 26.2. The sketch is within 3x of the exact cache from about 110 events
