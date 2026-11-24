@@ -59,3 +59,83 @@ func assertAggregateIsSumOfSlots(t testing.TB, r *Ring) {
 func slotCell(r *Ring, slot int, j uint64) *uint32 {
 	return &r.slots[uint64(slot*r.cellsPerSlot)+j]
 }
+
+// plantSlotCell sets cell j of slot to value and moves the aggregate cell by the
+// same amount, so the invariant still holds.
+func plantSlotCell(r *Ring, slot int, j uint64, value uint32) {
+	cell := slotCell(r, slot, j)
+	r.agg[j] = r.agg[j] - uint64(*cell) + uint64(value)
+	*cell = value
+}
+
+// hashSharingOnlyRow returns the first splitmix64 hash, searching from id 1000
+// on, whose cell is partner's in row and differs from partner's in every other
+// row of a width x depth sketch.
+func hashSharingOnlyRow(t testing.TB, partner, width uint64, depth, row int) uint64 {
+	t.Helper()
+	want := cellIndexes(partner, width, depth)
+	for id := uint64(1000); id < 1_000_000; id++ {
+		h := splitmix64(id)
+		got := cellIndexes(h, width, depth)
+		matches := true
+		for r := range depth {
+			if (got[r] == want[r]) != (r == row) {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return h
+		}
+	}
+	t.Fatalf("no hash shares only row %d with %#x at %dx%d", row, partner, width, depth)
+	return 0
+}
+
+// classicSlots is the classic count-min reference for a Ring: one Sketch per
+// slot, counted through AddHash. AddHash uses the hash as the Ring does, row r
+// at [r*width, (r+1)*width) and column(h, rowSalts[r], width) within it, so
+// each Sketch's cells line up with its slot's cells index for index.
+type classicSlots struct {
+	slots []*Sketch
+}
+
+func newClassicSlots(t testing.TB, width, depth, slots int) *classicSlots {
+	t.Helper()
+	c := &classicSlots{}
+	for range slots {
+		c.slots = append(c.slots, mustSketch(t, width, depth))
+	}
+	return c
+}
+
+func (c *classicSlots) add(slot int, h uint64) {
+	c.slots[slot].AddHash(h)
+}
+
+func (c *classicSlots) expire(slot int) {
+	c.slots[slot].Reset()
+}
+
+func (c *classicSlots) reset() {
+	for _, s := range c.slots {
+		s.Reset()
+	}
+}
+
+// aggregateCells sums every slot's cells, the aggregate a classic Ring holds.
+func (c *classicSlots) aggregateCells() []uint64 {
+	sum := make([]uint64, len(c.slots[0].cells))
+	for _, s := range c.slots {
+		for j, cell := range s.cells {
+			sum[j] += uint64(cell)
+		}
+	}
+	return sum
+}
+
+// estimate is the classic window estimate: the smallest aggregate cell of h.
+func (c *classicSlots) estimate(h uint64) uint64 {
+	s := c.slots[0]
+	return minCell(c.aggregateCells(), h, s.width, s.depth)
+}

@@ -10,6 +10,13 @@
 // width = ceil(e/epsilon) and depth = ceil(ln(1/delta)), the estimate exceeds the
 // true count by more than epsilon times the total with probability at most delta.
 //
+// Sketch applies that classic update. Ring applies the conservative update
+// instead: an occurrence raises only the item's counters, in its slot, that
+// equal the smallest of them there. No counter ends above what the classic
+// update would hold, so the same bound applies and no estimate is above the
+// classic one; in exchange, an item's estimate does not always grow with each
+// of its occurrences.
+//
 // Items are hashed once to 64 bits and every row derives its column from that
 // hash by a multiply-shift with its own odd salt, so a caller that already holds
 // a hash pays no further hashing. This scheme, one hash with a random odd salt

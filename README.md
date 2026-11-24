@@ -604,11 +604,12 @@ high-water mark that only `Store` advances, the strict liveness rule
 |---|---|
 | Exact count. | Never below the exact count. With one shard, above it by more than `Epsilon × events in the window` with probability at most `Delta`. |
 | First `Store` of a key returns `1`. | May return more than `1`. |
+| Two `Store`s of a key at the same epoch return consecutive counts. | They can return the same count: only the key's smallest counters in its bucket are raised, and the window count may sit on another one. Only collisions cause it. |
 | `Get` of an absent key returns `0`. | May return more than `0`. |
 | Keys do not affect each other. | Events of other keys can raise the count of yours. They never lower it. |
 | Memory grows with the number of keys; `Store` allocates for a new key. | Memory is fixed by `Epsilon`, `Delta` and `WindowSize / Precision`. `New` reserves all of it and nothing allocates afterwards. |
 | Any `WindowSize / Precision`. | At most 2^20 buckets per window; `New` returns an error above that. |
-| A bucket's count spills into further words. | A counter caps at 2^32−1 events per bucket. Such a `Store` is still accepted and counted in `Stats.Saturated`. |
+| A bucket's count spills into further words. | A counter caps at 2^32−1 events per bucket. A `Store` whose smallest counter in the bucket is capped is still accepted, raises nothing and is counted in `Stats.Saturated`. |
 | `Stats.Keys`; `GetHit` / `GetMiss` by presence of the key. | No `Keys`. `GetHit` is an estimate above `0`, `GetMiss` an estimate of `0`. |
 | The hash only spreads keys over shards. | The hash decides correctness: two keys with the same 64-bit hash count as one. The default is `hash/maphash` with a seed drawn per cache. |
 | `Store` stays within tens of ns at any traffic density. | Each new bucket costs an expiry per shard; see [Cost](#cost). |
@@ -631,6 +632,13 @@ the exact count with 99% probability. That is harmless against a limit of
 `Epsilon × events in the window` is small against the threshold you compare
 with. With more than one shard the bound holds on average over the keys; see
 [Sketch configuration](#sketch-configuration).
+
+A `Store` raises only the key's smallest counters in its bucket (the
+conservative update), which never makes an estimate larger than raising all of
+them would. The gain depends on how full the buckets are: a quarter to a half
+of the overestimate goes once a bucket receives a few events per column of the
+sketch, 10,000 per bucket with the default `Epsilon`, and little below one event
+per column.
 
 **Memory.** `New` reserves about `4 × width × depth` bytes per bucket:
 
@@ -672,13 +680,12 @@ the lifetime of the cache, and it is called on rejected events too.
 
 ### Cost
 
-Measured on an Apple M2, default `Epsilon` and `Shards`, 1 h window at 1 s
-(`benchmarks/countminsketch-phase3-*.txt`):
+Measured on an Apple M2, default `Epsilon` and `Shards`, 1 h window at 1 s:
 
 | | Exact | `countminsketch` |
 |---|---|---|
-| `Store`, 1,000 events per bucket (`StoreDense`) | 62.1 ns | 35.6 ns |
-| `Store`, one hot key (`StoreHotKeyNanos`, 5 min window) | 17.6 ns | 20.8 ns |
+| `Store`, 1,000 events per bucket (`StoreDense`) | 62.1 ns | 40.6 ns |
+| `Store`, one hot key (`StoreHotKeyNanos`, 5 min window) | 17.6 ns | 24.9 ns |
 | `Get`, many keys (`GetHitManyKeys`) | 27.7 ns | 16.7 ns |
 | `Store`, a new bucket on every call (`StoreManyKeys`) | 33.6 ns | 765 ns |
 
@@ -690,16 +697,16 @@ events of all keys together:
 
 | Events per bucket | Exact | `countminsketch` |
 |---|---|---|
-| 1 | 34 ns | 757 ns |
-| 10 | 34 ns | 466 ns |
-| 30 | 36 ns | 277 ns |
-| 100 | 36 ns | 121 ns |
-| 300 | 43 ns | 56 ns |
-| 1,000 | 58 ns | 35 ns |
-| 10,000 | 70 ns | 27 ns |
+| 1 | 34 ns | 753 ns |
+| 10 | 34 ns | 467 ns |
+| 30 | 36 ns | 279 ns |
+| 100 | 36 ns | 123 ns |
+| 300 | 43 ns | 62 ns |
+| 1,000 | 58 ns | 40 ns |
+| 10,000 | 70 ns | 32 ns |
 
-The sketch is within 3× of the exact cache from about 110 events per bucket and
-faster from about 450. An expiry clears `width × depth` counters, so those
+The sketch is within 3× of the exact cache from about 120 events per bucket and
+faster from about 550. An expiry clears `width × depth` counters, so those
 thresholds move with `1 / Epsilon`.
 
 A jump of the high-water mark expires one slot per bucket skipped, at most the

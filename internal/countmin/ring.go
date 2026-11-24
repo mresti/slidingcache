@@ -73,37 +73,71 @@ func (r *Ring) Slots() int {
 	return r.slotCount
 }
 
-// Add counts one occurrence of h in slot and the same occurrence in the
-// aggregate, in one pass over the rows since both share the cell indexes, and
-// returns the aggregate's estimate for h afterwards.
+// Add counts one occurrence of h in slot with the conservative update, mirrors
+// every raise in the aggregate, and returns the aggregate's estimate for h
+// afterwards.
 //
-// A row whose slot cell has already saturated is left unchanged in both, so the
-// invariant still holds, and saturated reports that it happened.
+// Only the rows whose slot cell equals the smallest of h's slot cells grow by
+// one, in the slot and in the aggregate; the other rows already hold at least
+// that count plus one and stay as they are. Within a slot this keeps the
+// smallest of h's cells at or above h's count in that slot. The aggregate's
+// estimate is a minimum of sums over the live slots, which is at least the sum
+// of those per-slot minimums, so it never falls below h's count, whichever
+// slots have expired. The minimum is taken over the slot and not over the
+// aggregate for that reason: a row skipped because other slots had raised its
+// aggregate cell would miss this occurrence once those slots expire. No cell
+// ever exceeds what the classic update, one per row, would hold, so the classic
+// error bound still applies.
+//
+// The estimate returned does not always grow by one: when h's smallest
+// aggregate cell is in a row that was not raised, it stays where it was. When
+// h has a row whose cell no other hash shares, that row is raised on every Add
+// and holds h's exact count, so the estimate is exact and grows by one.
+//
+// When the smallest slot cell has already saturated nothing moves, so the
+// invariant still holds, and saturated reports it. A saturated cell in a row
+// above the minimum does not count: that row is simply not raised.
+//
+// The first pass keeps the cell indexes on the stack for the second, which
+// measured faster than computing the columns twice. The second pass raises by a
+// 0 or 1 step rather than branching on each row, because whether a row sits at
+// the minimum is data-dependent and mispredicts often: the branchy form
+// measured more than twice as slow.
 func (r *Ring) Add(slot int, h uint64) (estimate uint64, saturated bool) {
-	slotCells, aggCells, width := r.slotCells(slot), r.agg, r.width
+	slotCells, aggCells := r.slotCells(slot), r.agg
+	var indexes [MaxDepth]uint64
+	rows := indexes[:r.depth]
+	smallest := r.smallestSlotCell(slotCells, h, rows)
+	// A row is raised when its cell is below smallest+1, that is, at the
+	// minimum. A saturated minimum wraps the bound to 0, which no cell is below.
+	bound := smallest + 1
 	estimate = math.MaxUint64
-	base := uint64(0)
-	for _, salt := range rowSalts[:r.depth] {
-		j := base + column(h, salt, width)
-		if !raiseMirrored(&slotCells[j], &aggCells[j]) {
-			saturated = true
+	for _, j := range rows {
+		cell := slotCells[j]
+		var step uint32
+		if cell < bound {
+			step = 1
 		}
-		estimate = min(estimate, aggCells[j])
-		base += width
+		slotCells[j] = cell + step
+		aggCell := aggCells[j] + uint64(step)
+		aggCells[j] = aggCell
+		estimate = min(estimate, aggCell)
 	}
-	return estimate, saturated
+	return estimate, bound == 0
 }
 
-// raiseMirrored is the classic count-min update of one row for a slot and its
-// aggregate: both cells grow by one, unless the slot cell is saturated, in which
-// case neither moves and it reports false.
-func raiseMirrored(slotCell *uint32, aggCell *uint64) bool {
-	if *slotCell == math.MaxUint32 {
-		return false
+// smallestSlotCell stores in rows the flat index of h's cell in each row and
+// returns the smallest of those cells in slotCells.
+func (r *Ring) smallestSlotCell(slotCells []uint32, h uint64, rows []uint64) uint32 {
+	smallest := uint32(math.MaxUint32)
+	base := uint64(0)
+	for i, salt := range rowSalts[:len(rows)] {
+		j := base + column(h, salt, r.width)
+		rows[i] = j
+		smallest = min(smallest, slotCells[j])
+		base += r.width
 	}
-	*slotCell++
-	*aggCell++
-	return true
+	return smallest
 }
 
 // Count returns the aggregate's estimate for h: the smallest of its cells.

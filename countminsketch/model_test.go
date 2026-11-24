@@ -109,14 +109,3 @@ func (m *referenceModel) count(key string) int {
 	}
 	return live
 }
-
-// liveTotal is the number of live events over every key, the most any
-// estimate can reach: a count-min estimate is the smallest of cells that each
-// sum a subset of the window's events.
-func (m *referenceModel) liveTotal() int {
-	total := 0
-	for key := range m.events {
-		total += m.count(key)
-	}
-	return total
-}

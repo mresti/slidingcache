@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/mresti/slidingcache"
+	"github.com/mresti/slidingcache/internal/countmin"
 )
 
 // reference is what a sketch cache is compared against: the root cache, or the
@@ -33,9 +34,10 @@ type harness struct {
 	sketch  *Cache
 	ref     reference
 	compare comparison
-	// bound tracks the exact live events of every key, for Mode B's upper bound.
-	// It is nil in Mode A.
+	// bound tracks the exact live events of every key, and layout the sketch's
+	// dimensions, for Mode B's upper bound. bound is nil in Mode A.
 	bound  *referenceModel
+	layout windowLayout
 	window *windowChecker
 }
 
@@ -60,17 +62,20 @@ func newExactHarness(t *testing.T, cfg Config, ref reference) *harness {
 }
 
 // newBoundedHarness is Mode B: the default maphash, collisions allowed, so a
-// count may only lie between the oracle's and the window's total.
+// count may only lie between the oracle's and the classic count-min estimate
+// of the live events.
 func newBoundedHarness(t *testing.T, cfg Config) *harness {
 	t.Helper()
 	sketch := newTestCache(t, cfg)
-	reseedUntilShardsSharedAndSpanned(t, sketch)
+	layout := mustLayout(t, cfg)
+	reseedUntilShardsSharedAndSpanned(t, sketch, layout)
 	return &harness{
 		t:       t,
 		sketch:  sketch,
 		ref:     newOracle(t, oracleConfig(t, cfg)),
 		compare: requireBounded,
 		bound:   newReferenceModel(cfg),
+		layout:  layout,
 		window:  newWindowChecker(),
 	}
 }
@@ -160,9 +165,35 @@ func requireBounded(h *harness, c call, got, want int) {
 	if got < want {
 		h.t.Fatalf("%v = %d, below the exact count %d", c, got, want)
 	}
-	if total := h.bound.liveTotal(); got > total {
-		h.t.Fatalf("%v = %d, above the %d live events of all keys", c, got, total)
+	if classic := h.classicEstimate(c.key); got > classic {
+		h.t.Fatalf("%v = %d, above the classic estimate %d of the live events", c, got, classic)
 	}
+}
+
+// classicEstimate is what the classic update, one per row, would estimate for
+// key from the live events the model holds: each live event of a key in the
+// same shard added once to a classic sketch of the shard's dimensions, which
+// maps hashes onto cells as the ring does. No cell of the conservative update
+// exceeds the classic one, so neither does its estimate.
+func (h *harness) classicEstimate(key string) int {
+	h.t.Helper()
+	bits := shardBitsOf(h.layout)
+	hash := h.sketch.hashOf(key)
+	shard := countmin.ShardOf(hash, bits)
+	s, err := countmin.NewSized(h.layout.shardWidth, h.layout.depth)
+	if err != nil {
+		h.t.Fatalf("NewSized(%d, %d): %v", h.layout.shardWidth, h.layout.depth, err)
+	}
+	for _, k := range testKeys {
+		kh := h.sketch.hashOf(k)
+		if countmin.ShardOf(kh, bits) != shard {
+			continue
+		}
+		for range h.bound.count(k) {
+			s.AddHash(kh)
+		}
+	}
+	return clampToInt(s.CountHash(hash))
 }
 
 func requireSameHighWater(t *testing.T, c call, sketch *Cache, ref reference) {
