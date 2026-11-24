@@ -73,13 +73,20 @@ func plantSlotCell(r *Ring, slot int, j uint64, value uint32) {
 // row of a width x depth sketch.
 func hashSharingOnlyRow(t testing.TB, partner, width uint64, depth, row int) uint64 {
 	t.Helper()
+	return hashSharingRows(t, partner, width, depth, func(r int) bool { return r == row })
+}
+
+// hashSharingRows returns the first splitmix64 hash, searching from id 1000 on,
+// whose cell is partner's in exactly the rows for which shared is true.
+func hashSharingRows(t testing.TB, partner, width uint64, depth int, shared func(row int) bool) uint64 {
+	t.Helper()
 	want := cellIndexes(partner, width, depth)
 	for id := uint64(1000); id < 1_000_000; id++ {
 		h := splitmix64(id)
 		got := cellIndexes(h, width, depth)
 		matches := true
 		for r := range depth {
-			if (got[r] == want[r]) != (r == row) {
+			if (got[r] == want[r]) != shared(r) {
 				matches = false
 				break
 			}
@@ -88,7 +95,7 @@ func hashSharingOnlyRow(t testing.TB, partner, width uint64, depth, row int) uin
 			return h
 		}
 	}
-	t.Fatalf("no hash shares only row %d with %#x at %dx%d", row, partner, width, depth)
+	t.Fatalf("no hash shares the wanted rows with %#x at %dx%d", partner, width, depth)
 	return 0
 }
 

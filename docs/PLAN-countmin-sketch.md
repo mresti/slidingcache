@@ -39,6 +39,7 @@ Aceptado el 2026-11-24:
   cache (~120 desde la Fase 5); más lento por debajo (§7, Fases 3 y 5).
 - `BenchmarkStoreDensity` se queda; `internal/window` no se extrae por ahora; Fase 5 aprobada.
 - Fase 5: conservative update siempre activo; gate de precisión re-alcanzado por densidad; `Ring.Add` a 12,5 ns.
+- Camino recto de `Ring.Add` para profundidad 5: se queda; se acepta +0,3 ns en las demás profundidades.
 
 Propuestas mías sin objeción:
 - Sin `SweepInterval` ni janitor: la RAM está acotada por construcción. `Close` queda como no-op por paridad.
@@ -164,7 +165,7 @@ func (s *Sketch) Reset()
 
 func NewRing(width, depth, slots int) (*Ring, error)            // slots uint32 en un array + agregado uint64
 func (r *Ring) Slots() int
-func (r *Ring) Add(slot int, h uint64) (estimate uint64, saturated bool) // conservative update en el slot, reflejado en el agregado
+func (r *Ring) Add(slot int, h uint64) (estimate uint64, saturated bool) // conservative update en el slot, reflejado en el agregado; camino recto si depth == 5
 func (r *Ring) Count(h uint64) uint64                           // estimación del agregado
 func (r *Ring) Expire(slot int)                                 // agregado -= slot; slot a cero
 func (r *Ring) Reset()
@@ -420,7 +421,8 @@ Coste (M2, A/B intercalado en dos rondas, 20 muestras por lado, brazo sketch; ex
   2026-11-24. `Count`, `Expire` y `Get` no cambian. 0 allocs.
 - `Store` sube 4-6 ns donde manda la actualización de contadores (+17% a +24%) y ~1% donde manda la caducidad.
 - El objetivo de 3× pasa de ~110 a ~120 eventos por bucket; la igualdad con el exacto, de ~450 a ~550.
-- Idea no probada para bajar de 12 ns: camino recto para profundidad 5, sin bucle ni array de índices.
+- Idea para bajar de 12 ns, probada después y adoptada (ver más abajo): camino recto para profundidad 5,
+  sin bucle ni array de índices.
 
 Verificación:
 - `make ci` verde en go1.26.4 y go1.27.3 (cobertura 100% raíz, 98,6% y 98,4%); vet linux/386 de los paquetes
@@ -440,6 +442,44 @@ Verificación:
   `StoreMediumCardinalitySameBucket` 25,5 -> 31,2; densidad 100: 123 ns (3,4× el exacto). RAM igual:
   196.591.872 B. El README cita ya las cifras del archivo.
 - Sin verificar: tests en 32 bit; rama `Stats.Saturated++`.
+
+**Camino recto para profundidad 5 en `Ring.Add`. HECHO (2026-11-24, rama `perf/countmin-ring-add-depth5`).**
+Era la idea no probada de la Fase 5. Con `depth == 5` (el valor por defecto, `Delta` 0,01) `Add` no usa bucle
+ni array de índices: cinco columnas, el mínimo de las cinco celdas del slot y cinco subidas sin saltos. Las
+demás profundidades siguen por el bucle genérico (`addGeneric`). Misma semántica; 35 líneas de código.
+
+Criterio fijado antes de medir y resultado (M2, A/B intercalado en dos rondas, 20 muestras por lado):
+
+| Benchmark | antes | camino recto |
+|---|---|---|
+| `RingAdd` 2719×5 | 12,6 ns | 9,7 ns |
+| `RingAdd` 22×5 | 12,5 ns | 8,0 ns |
+| `RingAdd` 2719×7 (ruta genérica) | 16,8 ns | 17,1 ns |
+| `StoreDense` | 40,2 ns | 34,5 ns |
+| `StoreHotKeyNanos` | 24,9 ns | 20,4 ns |
+| `StoreMediumCardinalitySameBucket` (10K keys) | 31,3 ns | 25,0 ns |
+| `StoreDensity`, 100 eventos por bucket | 123,5 ns | 118,0 ns |
+| `StoreDensity`, 1000 | 40,4 ns | 34,7 ns |
+| `StoreManyKeys` | 751 ns | 746 ns |
+
+- `RingAdd` <= 12 ns: cumplido (9,7; el clásico daba 9,6). Mejora en `Store` por encima del ruido: cumplido
+  (14-23%; las filas que no cambian, `Count`, `Expire`, `Get`, se mueven <= 0,6%).
+- «La ruta genérica no empeora»: NO cumplido, y aceptado: +0,3 ns (+1,9%) a 2719×7 por la llamada extra a
+  `addGeneric`. Es una cifra del anillo; no hay fila de `Store` a otra profundidad. La alternativa (cuerpo
+  genérico dentro de `Add`) no cuesta nada a las demás profundidades pero pierde el test que compara las dos
+  implementaciones a profundidad 5.
+- Con esto el conservative update no cuesta nada medible a la profundidad por defecto: `Store` vuelve a las
+  cifras del clásico.
+- Riesgo: dos implementaciones de la misma actualización. Lo vigilan un test diferencial celda a celda entre
+  las dos (anillos gemelos de 4×5, con celdas plantadas en el tope), tests de celdas exactas fila a fila a
+  profundidad 5 y tests a profundidad 4, 6 y 16 (frontera del despacho). `FuzzRingWindow` corre con 8×3, 4×5
+  y 4×6; el fuzz de colisiones de la cache, con profundidad 1, 2, 3 o 5.
+- Mutantes a mano: 35 míos sobre el camino recto y 19 sobre el genérico, más los de Pedro. Un hueco real
+  encontrado y cerrado: ningún test con aserciones corría por encima de profundidad 5, así que un despacho
+  `depth < 5` sobrevivía. Otro: los tests de `countminsketch` por sí solos no veían un mínimo mal calculado a
+  profundidad 5 (el fuzz de colisiones solo llegaba a 3).
+- Solo medido en M2 (arm64). En amd64 se ha mirado el código generado: la subida compila sin saltos
+  (`SETCS`/`CMOV`); no hay tiempos.
 
 Verificación local en todas las fases: `go vet`, tests con `-race` y lint (golangci-lint v2.15.0), todo en
 go1.26.4 y go1.27.3.

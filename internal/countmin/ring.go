@@ -98,12 +98,59 @@ func (r *Ring) Slots() int {
 // invariant still holds, and saturated reports it. A saturated cell in a row
 // above the minimum does not count: that row is simply not raised.
 //
+// Depth 5, the depth of the default delta 0.01, is unrolled here: the five
+// cell indexes stay in registers rather than in an array on the stack, which
+// measured about 23% faster than the loop of addGeneric at 2719x5. Other depths
+// take addGeneric. Unrolling in Add rather than in a helper of its own spares
+// depth 5 a call, at the price of one call for the other depths.
+func (r *Ring) Add(slot int, h uint64) (estimate uint64, saturated bool) {
+	if r.depth != 5 {
+		return r.addGeneric(slot, h)
+	}
+	slotCells, width := r.slotCells(slot), r.width
+	aggCells := r.agg[:len(slotCells)]
+	j0 := column(h, rowSalts[0], width)
+	base := width
+	j1 := base + column(h, rowSalts[1], width)
+	base += width
+	j2 := base + column(h, rowSalts[2], width)
+	base += width
+	j3 := base + column(h, rowSalts[3], width)
+	base += width
+	j4 := base + column(h, rowSalts[4], width)
+	c0, c1, c2, c3, c4 := slotCells[j0], slotCells[j1], slotCells[j2], slotCells[j3], slotCells[j4]
+	bound := min(c0, c1, c2, c3, c4) + 1
+	a0 := raiseRow(slotCells, aggCells, j0, c0, bound)
+	a1 := raiseRow(slotCells, aggCells, j1, c1, bound)
+	a2 := raiseRow(slotCells, aggCells, j2, c2, bound)
+	a3 := raiseRow(slotCells, aggCells, j3, c3, bound)
+	a4 := raiseRow(slotCells, aggCells, j4, c4, bound)
+	return min(a0, a1, a2, a3, a4), bound == 0
+}
+
+// raiseRow raises cell j by one in the slot and the aggregate when the slot
+// cell, already loaded as cell, is below bound, and returns the aggregate cell.
+// It steps by 0 or 1 instead of branching, for the reason given on addGeneric.
+func raiseRow(slotCells []uint32, aggCells []uint64, j uint64, cell, bound uint32) uint64 {
+	var step uint32
+	if cell < bound {
+		step = 1
+	}
+	slotCells[j] = cell + step
+	aggCell := aggCells[j] + uint64(step)
+	aggCells[j] = aggCell
+	return aggCell
+}
+
+// addGeneric is Add for any depth, and the reference the unrolled depth 5 is
+// tested against.
+//
 // The first pass keeps the cell indexes on the stack for the second, which
 // measured faster than computing the columns twice. The second pass raises by a
 // 0 or 1 step rather than branching on each row, because whether a row sits at
 // the minimum is data-dependent and mispredicts often: the branchy form
 // measured more than twice as slow.
-func (r *Ring) Add(slot int, h uint64) (estimate uint64, saturated bool) {
+func (r *Ring) addGeneric(slot int, h uint64) (estimate uint64, saturated bool) {
 	slotCells, aggCells := r.slotCells(slot), r.agg
 	var indexes [MaxDepth]uint64
 	rows := indexes[:r.depth]
