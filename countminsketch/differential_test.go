@@ -114,37 +114,85 @@ func FuzzExactAgreesWithOracle(f *testing.F) {
 	})
 }
 
+// fuzzDepths are the sketch depths a fuzzed byte selects among in Mode B, and
+// fuzzDepthDeltas the Delta giving each, ceil(ln(1/Delta)) rows. One row makes
+// the conservative update the classic one; two and three rows exercise it.
+var (
+	fuzzDepths      = [...]int{1, 2, 3}
+	fuzzDepthDeltas = [...]float64{0.9, 0.2, 0.06}
+)
+
+func foldDepth(b byte) int {
+	return int(b) % len(fuzzDepths)
+}
+
+// addForEveryShardCountAndDepth adds a seed once per shard count and depth, so
+// the seed corpus covers every combination.
+func addForEveryShardCountAndDepth(f *testing.F, seed func(shards, depth byte) []any) {
+	for d := range byte(len(fuzzDepths)) {
+		addForEveryShardCount(f, func(shards byte) []any { return seed(shards, d) })
+	}
+}
+
 // FuzzCollisionsBoundedByOracle is Mode B: the narrowest sketch New accepts,
-// with one row and the default hash, so collisions are frequent: the rule with
-// one shard of 4 columns, common with 8 columns per shard. Rejections must
-// still be identical and every count between root's and the window's total.
+// at 1, 2 or 3 rows, with the default hash, so collisions are frequent: the
+// rule with one shard of 4 columns, common with 8 columns per shard.
+// Rejections must still be identical and every count between root's and the
+// classic estimate of the live events.
 func FuzzCollisionsBoundedByOracle(f *testing.F) {
 	for _, s := range rangeSeeds() {
-		addForEveryShardCount(f, func(shards byte) []any {
-			return []any{s.base, byte(s.bits - minTimestampBits), shards, s.ops}
+		addForEveryShardCountAndDepth(f, func(shards, depth byte) []any {
+			return []any{s.base, byte(s.bits - minTimestampBits), shards, depth, s.ops}
 		})
 	}
-	f.Fuzz(func(t *testing.T, base int64, bits, shards byte, ops []byte) {
-		cfg := narrowestConfig(t, foldOracleBits(bits), foldShards(shards))
+	slide := slidingStores()
+	addForEveryShardCountAndDepth(f, func(shards, depth byte) []any {
+		return []any{int64(1_700_000_000), byte(defaultTimestampBits - minTimestampBits), shards, depth, slide}
+	})
+	f.Fuzz(func(t *testing.T, base int64, bits, shards, depth byte, ops []byte) {
+		cfg := narrowestConfig(t, foldOracleBits(bits), foldShards(shards), foldDepth(depth))
 		replayRangeOps(newBoundedHarness(t, cfg), cfg.timestampBits(), base, ops)
 	})
 }
 
-// narrowestConfig is a sketch of one row and as few columns as New allows: 4
-// with one shard, minShardWidth per shard with more.
-func narrowestConfig(t *testing.T, timestampBits, shards int) Config {
+// slidingStores is a seed in root's encoding that slides the mark over all 32
+// bucket offsets the encoding reaches, more than five times the 6 buckets of
+// the window. Each bucket stores every key 1 to 3 times, a multiplicity that
+// rotates with the bucket. A key counted while its counters are high from
+// older buckets, which then expire, is what a minimum read from the aggregate
+// instead of the slot undercounts. Which keys collide changes from run to run
+// with the default hash's random seed; over so many buckets some partial
+// collision is near certain at 2 and 3 rows.
+func slidingStores() []byte {
+	const buckets = 32
+	multiplicities := [len(testKeys)]int{3, 1, 2, 1}
+	var ops []byte
+	for bucket := range buckets {
+		offset := byte(bucket) << 3
+		for k := range testKeys {
+			for range multiplicities[(k+bucket)%len(testKeys)] {
+				ops = append(ops, offset|byte(k))
+			}
+		}
+	}
+	return ops
+}
+
+// narrowestConfig is a sketch of fuzzDepths[depthIndex] rows and as few
+// columns as New allows: 4 with one shard, minShardWidth per shard with more.
+func narrowestConfig(t *testing.T, timestampBits, shards, depthIndex int) Config {
 	t.Helper()
 	cfg := shardedSecondsConfig(timestampBits, shards)
-	cfg.Epsilon, cfg.Delta = 0.9, 0.9
-	wantWidth := 4
+	cfg.Epsilon, cfg.Delta = 0.9, fuzzDepthDeltas[depthIndex]
+	wantWidth, wantDepth := 4, fuzzDepths[depthIndex]
 	if shards > 1 {
 		// Just under e/Epsilon = minShardWidth*shards, so the ceiling lands on it.
 		cfg.Epsilon = math.E / (float64(minShardWidth*shards) - 0.5)
 		wantWidth = minShardWidth
 	}
-	if layout := mustLayout(t, cfg); layout.shardWidth != wantWidth || layout.depth != 1 {
-		t.Fatalf("narrowest config with %d shards is %dx%d per shard, want %dx1",
-			shards, layout.shardWidth, layout.depth, wantWidth)
+	if layout := mustLayout(t, cfg); layout.shardWidth != wantWidth || layout.depth != wantDepth {
+		t.Fatalf("narrowest config with %d shards is %dx%d per shard, want %dx%d",
+			shards, layout.shardWidth, layout.depth, wantWidth, wantDepth)
 	}
 	return cfg
 }

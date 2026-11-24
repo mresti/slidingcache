@@ -9,7 +9,13 @@
 // are counted. Instead of a list of buckets per key, the window of each shard is
 // a ring of count-min sketches, one per Precision bucket, plus an aggregate that holds
 // their cell-wise sum, so a Store or a Get touches a fixed number of counters
-// whatever the number of keys.
+// whatever the number of keys. A Store uses the conservative update: in the
+// sketch of its bucket it raises only the key's counters that equal the
+// smallest of them, which never makes an estimate larger than raising every
+// one would. How much smaller depends on how full the buckets are: a quarter
+// to a half of the overestimate goes once a bucket receives a few events per
+// column of the sketch, and little when it receives fewer events than there
+// are columns.
 //
 // # Guarantee
 //
@@ -34,6 +40,12 @@
 //     an absent key may return more than 0.
 //   - Events of other keys can inflate the count of yours: collisions only ever
 //     add.
+//   - A Store does not always return one more than the previous count of the
+//     key: two Stores of the same key at the same epoch can return the same
+//     count, when the key's smallest counter in the window is one the Store
+//     did not raise.
+//     Only collisions cause it: with a hash that leaves each key alone in at
+//     least one row, every Store returns one more.
 //   - Memory is fixed by Epsilon, Delta, WindowSize and Precision instead of
 //     growing with the number of keys, and New allocates all of it up front:
 //     about 4 x width x depth bytes per bucket. More shards add only the
@@ -42,9 +54,10 @@
 //     configuration whose estimate exceeds Config.MaxMemoryBytes, 1 GiB by
 //     default, before allocating anything.
 //   - A window holds at most 2^20 Precision buckets; New rejects more.
-//   - A counter caps at 2^32-1 events per bucket. A Store that meets a capped
-//     counter is still accepted and is counted in Stats.Saturated; the estimate
-//     of a key that hot is then low rather than wrapped.
+//   - A counter caps at 2^32-1 events per bucket. A Store whose smallest
+//     counter in the bucket is capped is still accepted, raises nothing and is
+//     counted in Stats.Saturated; the estimate of a key that hot is then low
+//     rather than wrapped.
 //   - Stats has no key count, and GetHit and GetMiss are decided by the estimate,
 //     not by the presence of the key.
 //

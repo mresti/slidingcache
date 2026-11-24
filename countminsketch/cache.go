@@ -251,8 +251,8 @@ type Stats struct {
 	GetLate uint64
 	// GetFuture counts the Get calls rejected as too far ahead of the clock.
 	GetFuture uint64
-	// Saturated counts the accepted Store calls that met a counter already at
-	// 2^32-1 events in its bucket, which therefore did not grow. A non-zero
+	// Saturated counts the accepted Store calls whose smallest counter in the
+	// bucket was already at 2^32-1 events, so that no counter grew. A non-zero
 	// value means estimates for the hottest keys may be low.
 	Saturated uint64
 }

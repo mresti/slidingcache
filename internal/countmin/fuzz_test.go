@@ -35,18 +35,30 @@ func FuzzSketchAgainstExactCounts(f *testing.F) {
 	})
 }
 
-// fuzzWindow is a sliding window in miniature: a ring of slots and the exact
-// count of every key in every slot.
+// fuzzWindow is a sliding window in miniature: a ring of slots, the exact
+// count of every key in every slot, and the classic reference fed the same
+// operations.
 type fuzzWindow struct {
 	ring    *Ring
 	exact   []map[uint64]uint64
+	classic *classicSlots
 	current int
+	// slotCells and aggCells are reused buffers for the ring's cells.
+	slotCells []uint32
+	aggCells  []uint64
 }
 
-const fuzzWindowSlots = 4
+const (
+	fuzzWindowSlots = 4
+	fuzzWidth       = 8
+	fuzzDepth       = 3
+)
 
 func newFuzzWindow(t *testing.T) *fuzzWindow {
-	w := &fuzzWindow{ring: mustRing(t, 8, 3, fuzzWindowSlots)}
+	w := &fuzzWindow{
+		ring:    mustRing(t, fuzzWidth, fuzzDepth, fuzzWindowSlots),
+		classic: newClassicSlots(t, fuzzWidth, fuzzDepth, fuzzWindowSlots),
+	}
 	for range fuzzWindowSlots {
 		w.exact = append(w.exact, make(map[uint64]uint64))
 	}
@@ -55,6 +67,7 @@ func newFuzzWindow(t *testing.T) *fuzzWindow {
 
 func (w *fuzzWindow) add(h uint64) {
 	w.ring.Add(w.current, h)
+	w.classic.add(w.current, h)
 	w.exact[w.current][h]++
 }
 
@@ -62,11 +75,13 @@ func (w *fuzzWindow) add(h uint64) {
 func (w *fuzzWindow) expire() {
 	w.current = (w.current + 1) % fuzzWindowSlots
 	w.ring.Expire(w.current)
+	w.classic.expire(w.current)
 	clear(w.exact[w.current])
 }
 
 func (w *fuzzWindow) reset() {
 	w.ring.Reset()
+	w.classic.reset()
 	for _, counts := range w.exact {
 		clear(counts)
 	}
@@ -91,12 +106,46 @@ func (w *fuzzWindow) assertCountsBoundLiveEvents(t *testing.T) {
 	}
 }
 
+// assertCellsBelowClassicAndSummed reads the ring through its public views
+// only: every slot cell is at most the classic slot's, every aggregate cell is
+// the sum of the slots' and at most the classic aggregate's.
+func (w *fuzzWindow) assertCellsBelowClassicAndSummed(t *testing.T) {
+	t.Helper()
+	w.aggCells = w.ring.AppendAggregateCells(w.aggCells[:0])
+	sum := make([]uint64, len(w.aggCells))
+	for slot, classic := range w.classic.slots {
+		w.slotCells = w.ring.AppendSlotCells(w.slotCells[:0], slot)
+		for j, cell := range w.slotCells {
+			if cell > classic.cells[j] {
+				t.Fatalf("slot %d cell %d = %d, above the classic %d", slot, j, cell, classic.cells[j])
+			}
+			sum[j] += uint64(cell)
+		}
+	}
+	classicAggregate := w.classic.aggregateCells()
+	for j, got := range w.aggCells {
+		if got != sum[j] {
+			t.Fatalf("aggregate cell %d = %d, the slots sum to %d", j, got, sum[j])
+		}
+		if got > classicAggregate[j] {
+			t.Fatalf("aggregate cell %d = %d, above the classic %d", j, got, classicAggregate[j])
+		}
+	}
+}
+
 // FuzzRingWindow drives a ring of slots through adds, expiries and resets. The
 // top two bits of each byte choose the operation and the low four the key.
+// After every operation it checks properties only: estimates at least the
+// exact live count, cells at most the classic update's, and the aggregate the
+// sum of the slots.
 func FuzzRingWindow(f *testing.F) {
 	f.Add([]byte{0x01, 0x02, 0x80, 0x03, 0xc0, 0x01})
 	f.Add([]byte{0x00, 0x00, 0x00, 0x80, 0x80, 0x80, 0x80, 0x00})
 	f.Add([]byte{0x05, 0x45, 0x85, 0xc5, 0x05, 0x45, 0x80, 0x80})
+	// Keys 0 and 6 share exactly row 1 at 8 x 3: 0 is hot in slot 0, 6 is
+	// counted once in slot 1, then slot 0 expires. A minimum read from the
+	// aggregate would leave the shared row of slot 1 at 0 and count 6 as 0.
+	f.Add([]byte{0x00, 0x00, 0x00, 0x80, 0x06, 0x80, 0x80, 0x80})
 	f.Fuzz(func(t *testing.T, ops []byte) {
 		w := newFuzzWindow(t)
 		for _, op := range ops {
@@ -108,7 +157,7 @@ func FuzzRingWindow(f *testing.F) {
 			default:
 				w.reset()
 			}
-			assertAggregateIsSumOfSlots(t, w.ring)
+			w.assertCellsBelowClassicAndSummed(t)
 			w.assertCountsBoundLiveEvents(t)
 		}
 	})

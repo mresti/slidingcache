@@ -1,0 +1,637 @@
+# go go1.27.3 | Apple M2 | 8 cores | commit 1f42463 (feat/countmin-phase-5-conservative-update) | 2026-11-24T20:36Z
+goos: darwin
+goarch: arm64
+pkg: github.com/mresti/slidingcache/countminsketch
+cpu: Apple M2
+BenchmarkStoreSingleKey/impl=exact        	49775413	        24.50 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreSingleKey/impl=exact        	49195448	        24.41 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreSingleKey/impl=exact        	49338217	        24.33 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreSingleKey/impl=exact        	48937645	        24.25 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreSingleKey/impl=exact        	49546426	        24.43 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreSingleKey/impl=exact        	49348275	        24.52 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreSingleKey/impl=exact        	49086781	        24.37 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreSingleKey/impl=exact        	49106950	        24.30 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreSingleKey/impl=exact        	49570303	        24.54 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreSingleKey/impl=exact        	49011264	        24.58 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreSingleKey/impl=sketch       	 3451328	       348.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSingleKey/impl=sketch       	 3447972	       348.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSingleKey/impl=sketch       	 3467628	       348.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSingleKey/impl=sketch       	 3458461	       347.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSingleKey/impl=sketch       	 3465775	       349.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSingleKey/impl=sketch       	 3449793	       349.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSingleKey/impl=sketch       	 3449950	       348.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSingleKey/impl=sketch       	 3460828	       347.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSingleKey/impl=sketch       	 3460196	       348.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSingleKey/impl=sketch       	 3457137	       347.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreManyKeys/impl=exact         	35469546	        34.14 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreManyKeys/impl=exact         	35643697	        33.63 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreManyKeys/impl=exact         	35605598	        33.61 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreManyKeys/impl=exact         	35707332	        33.47 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreManyKeys/impl=exact         	35807494	        33.51 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreManyKeys/impl=exact         	35772562	        33.76 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreManyKeys/impl=exact         	35759215	        33.56 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreManyKeys/impl=exact         	35642871	        33.69 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreManyKeys/impl=exact         	35744328	        33.67 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreManyKeys/impl=exact         	35597572	        33.48 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreManyKeys/impl=sketch        	 1578682	       759.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreManyKeys/impl=sketch        	 1592538	       755.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreManyKeys/impl=sketch        	 1578712	       761.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreManyKeys/impl=sketch        	 1583539	       755.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreManyKeys/impl=sketch        	 1585850	       758.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreManyKeys/impl=sketch        	 1576748	       758.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreManyKeys/impl=sketch        	 1560024	       765.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreManyKeys/impl=sketch        	 1573725	       766.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreManyKeys/impl=sketch        	 1549790	       765.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreManyKeys/impl=sketch        	 1565275	       776.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHit/impl=exact                	68790740	        16.59 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHit/impl=exact                	71883547	        16.73 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHit/impl=exact                	73178356	        16.57 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHit/impl=exact                	73073263	        16.52 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHit/impl=exact                	72317834	        16.64 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHit/impl=exact                	72594182	        16.49 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHit/impl=exact                	72921915	        16.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHit/impl=exact                	73048428	        16.36 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHit/impl=exact                	72985668	        16.41 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHit/impl=exact                	72839475	        16.38 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHit/impl=sketch               	72456290	        16.57 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHit/impl=sketch               	72550108	        16.51 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHit/impl=sketch               	72317110	        16.57 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHit/impl=sketch               	72385267	        16.58 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHit/impl=sketch               	71773374	        16.56 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHit/impl=sketch               	71783926	        16.55 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHit/impl=sketch               	72344176	        16.54 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHit/impl=sketch               	72457750	        16.58 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHit/impl=sketch               	71204817	        16.57 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHit/impl=sketch               	72349628	        16.58 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetMiss/impl=exact               	75402536	        14.76 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetMiss/impl=exact               	81456949	        14.77 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetMiss/impl=exact               	81419637	        14.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetMiss/impl=exact               	81271904	        14.73 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetMiss/impl=exact               	81506971	        14.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetMiss/impl=exact               	81540894	        14.82 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetMiss/impl=exact               	81317340	        14.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetMiss/impl=exact               	81482066	        14.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetMiss/impl=exact               	81441514	        14.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetMiss/impl=exact               	80847099	        14.75 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetMiss/impl=sketch              	73182074	        16.49 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetMiss/impl=sketch              	73860170	        16.52 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetMiss/impl=sketch              	73123357	        16.56 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetMiss/impl=sketch              	67817042	        17.02 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetMiss/impl=sketch              	67210570	        16.61 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetMiss/impl=sketch              	73573176	        16.64 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetMiss/impl=sketch              	69205480	        16.56 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetMiss/impl=sketch              	73115930	        16.48 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetMiss/impl=sketch              	73173703	        16.62 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetMiss/impl=sketch              	73755567	        16.85 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=1000/impl=exact         	39770380	        29.25 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=1000/impl=exact         	39539311	        29.67 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=1000/impl=exact         	40645012	        29.86 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=1000/impl=exact         	40334890	        29.40 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=1000/impl=exact         	41101285	        29.28 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=1000/impl=exact         	40297472	        29.39 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=1000/impl=exact         	40990956	        29.55 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=1000/impl=exact         	40700270	        29.68 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=1000/impl=exact         	40292342	        29.54 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=1000/impl=exact         	40363551	        29.11 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=1000/impl=sketch        	 1691334	       708.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=1000/impl=sketch        	 1690436	       714.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=1000/impl=sketch        	 1689633	       708.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=1000/impl=sketch        	 1670343	       733.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=1000/impl=sketch        	 1701750	       702.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=1000/impl=sketch        	 1672622	       707.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=1000/impl=sketch        	 1698422	       711.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=1000/impl=sketch        	 1701392	       701.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=1000/impl=sketch        	 1692229	       716.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=1000/impl=sketch        	 1690078	       709.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=100000/impl=exact       	35713730	        33.90 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=100000/impl=exact       	35963727	        33.27 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=100000/impl=exact       	35917831	        33.27 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=100000/impl=exact       	35937708	        33.32 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=100000/impl=exact       	35912176	        33.75 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=100000/impl=exact       	35915887	        33.34 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=100000/impl=exact       	36032864	        33.44 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=100000/impl=exact       	35867679	        33.32 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=100000/impl=exact       	35884984	        33.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=100000/impl=exact       	35834523	        33.36 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=100000/impl=sketch      	 1597536	       750.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=100000/impl=sketch      	 1595988	       751.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=100000/impl=sketch      	 1598850	       748.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=100000/impl=sketch      	 1597275	       750.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=100000/impl=sketch      	 1597422	       754.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=100000/impl=sketch      	 1587775	       754.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=100000/impl=sketch      	 1587027	       754.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=100000/impl=sketch      	 1585489	       754.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=100000/impl=sketch      	 1584259	       756.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyState/keys=100000/impl=sketch      	 1581070	       751.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreLateReject/impl=exact                    	162831945	         7.364 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreLateReject/impl=exact                    	162422412	         7.361 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreLateReject/impl=exact                    	162876764	         7.363 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreLateReject/impl=exact                    	163068366	         7.364 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreLateReject/impl=exact                    	163108808	         7.358 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreLateReject/impl=exact                    	162312254	         7.386 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreLateReject/impl=exact                    	162972500	         7.362 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreLateReject/impl=exact                    	162954721	         7.361 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreLateReject/impl=exact                    	163119432	         7.357 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreLateReject/impl=exact                    	163030003	         7.362 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreLateReject/impl=sketch                   	147838629	         8.071 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreLateReject/impl=sketch                   	146406289	         8.296 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreLateReject/impl=sketch                   	150810361	         8.698 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreLateReject/impl=sketch                   	131751328	         8.026 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreLateReject/impl=sketch                   	147364568	         8.130 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreLateReject/impl=sketch                   	131780398	         9.101 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreLateReject/impl=sketch                   	145543620	         8.065 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreLateReject/impl=sketch                   	148461352	         8.622 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreLateReject/impl=sketch                   	149090925	         8.062 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreLateReject/impl=sketch                   	150548317	         8.246 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHitManyKeys/impl=exact                     	41661783	        27.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHitManyKeys/impl=exact                     	43315630	        27.72 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHitManyKeys/impl=exact                     	43254543	        27.84 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHitManyKeys/impl=exact                     	42764104	        27.88 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHitManyKeys/impl=exact                     	43017240	        27.99 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHitManyKeys/impl=exact                     	42691776	        27.97 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHitManyKeys/impl=exact                     	42817321	        27.84 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHitManyKeys/impl=exact                     	42987000	        27.80 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHitManyKeys/impl=exact                     	43064517	        27.89 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHitManyKeys/impl=exact                     	43076370	        27.99 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHitManyKeys/impl=sketch                    	69073855	        16.56 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHitManyKeys/impl=sketch                    	72549745	        16.60 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHitManyKeys/impl=sketch                    	72450825	        16.64 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHitManyKeys/impl=sketch                    	72547004	        16.61 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHitManyKeys/impl=sketch                    	72097870	        16.63 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHitManyKeys/impl=sketch                    	72314749	        16.64 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHitManyKeys/impl=sketch                    	72122605	        16.70 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHitManyKeys/impl=sketch                    	72437342	        16.65 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHitManyKeys/impl=sketch                    	71976427	        16.60 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetHitManyKeys/impl=sketch                    	72434059	        16.62 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreOutOfOrder/impl=exact                    	19290058	        59.88 ns/op	      18 B/op	       0 allocs/op
+BenchmarkStoreOutOfOrder/impl=exact                    	19804839	        59.51 ns/op	      18 B/op	       0 allocs/op
+BenchmarkStoreOutOfOrder/impl=exact                    	19648737	        59.20 ns/op	      18 B/op	       0 allocs/op
+BenchmarkStoreOutOfOrder/impl=exact                    	19823665	        59.02 ns/op	      18 B/op	       0 allocs/op
+BenchmarkStoreOutOfOrder/impl=exact                    	19912467	        59.07 ns/op	      18 B/op	       0 allocs/op
+BenchmarkStoreOutOfOrder/impl=exact                    	19856385	        58.91 ns/op	      18 B/op	       0 allocs/op
+BenchmarkStoreOutOfOrder/impl=exact                    	19973644	        59.17 ns/op	      18 B/op	       0 allocs/op
+BenchmarkStoreOutOfOrder/impl=exact                    	19983651	        59.52 ns/op	      18 B/op	       0 allocs/op
+BenchmarkStoreOutOfOrder/impl=exact                    	19828387	        59.36 ns/op	      18 B/op	       0 allocs/op
+BenchmarkStoreOutOfOrder/impl=exact                    	19914463	        59.46 ns/op	      18 B/op	       0 allocs/op
+BenchmarkStoreOutOfOrder/impl=sketch                   	 4939459	       241.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreOutOfOrder/impl=sketch                   	 4989285	       240.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreOutOfOrder/impl=sketch                   	 4966129	       240.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreOutOfOrder/impl=sketch                   	 4993713	       240.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreOutOfOrder/impl=sketch                   	 4972399	       240.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreOutOfOrder/impl=sketch                   	 4986754	       240.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreOutOfOrder/impl=sketch                   	 4986800	       240.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreOutOfOrder/impl=sketch                   	 4967611	       241.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreOutOfOrder/impl=sketch                   	 4986028	       240.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreOutOfOrder/impl=sketch                   	 4988031	       241.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeySameBucket/impl=exact              	64242552	        17.61 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeySameBucket/impl=exact              	67744300	        17.62 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeySameBucket/impl=exact              	68507000	        17.64 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeySameBucket/impl=exact              	68403187	        17.56 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeySameBucket/impl=exact              	68164389	        17.65 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeySameBucket/impl=exact              	68276376	        17.56 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeySameBucket/impl=exact              	68514333	        17.64 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeySameBucket/impl=exact              	68452290	        17.57 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeySameBucket/impl=exact              	68416672	        17.62 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeySameBucket/impl=exact              	68262134	        17.57 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeySameBucket/impl=sketch             	48137190	        24.78 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeySameBucket/impl=sketch             	48500116	        24.76 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeySameBucket/impl=sketch             	48465835	        24.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeySameBucket/impl=sketch             	48479299	        24.78 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeySameBucket/impl=sketch             	48432501	        24.77 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeySameBucket/impl=sketch             	48463390	        24.78 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeySameBucket/impl=sketch             	48529292	        24.76 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeySameBucket/impl=sketch             	48455073	        24.77 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeySameBucket/impl=sketch             	48534362	        24.80 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeySameBucket/impl=sketch             	48019207	        24.82 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=100/impl=exact         	45223218	        25.41 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=100/impl=exact         	45825794	        25.70 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=100/impl=exact         	46657584	        25.34 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=100/impl=exact         	47844424	        25.47 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=100/impl=exact         	46766152	        25.45 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=100/impl=exact         	46667940	        25.33 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=100/impl=exact         	45822150	        25.40 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=100/impl=exact         	47203905	        25.58 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=100/impl=exact         	47238436	        25.64 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=100/impl=exact         	47373018	        25.45 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=100/impl=sketch        	38727219	        30.92 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=100/impl=sketch        	38812604	        31.09 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=100/impl=sketch        	38675004	        31.09 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=100/impl=sketch        	38796709	        31.04 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=100/impl=sketch        	38791117	        31.03 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=100/impl=sketch        	38774196	        31.00 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=100/impl=sketch        	38721074	        31.07 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=100/impl=sketch        	38738210	        31.28 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=100/impl=sketch        	38775866	        31.03 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=100/impl=sketch        	38689084	        31.06 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=1000/impl=exact        	49359016	        24.11 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=1000/impl=exact        	49173861	        24.47 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=1000/impl=exact        	49634635	        23.90 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=1000/impl=exact        	49196624	        24.48 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=1000/impl=exact        	49892246	        24.09 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=1000/impl=exact        	49990626	        24.56 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=1000/impl=exact        	49581567	        24.51 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=1000/impl=exact        	49408386	        24.53 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=1000/impl=exact        	49249795	        24.22 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=1000/impl=exact        	49196374	        24.61 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=1000/impl=sketch       	37891944	        31.69 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=1000/impl=sketch       	37755240	        31.61 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=1000/impl=sketch       	37935566	        31.92 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=1000/impl=sketch       	37937666	        31.72 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=1000/impl=sketch       	37810359	        31.72 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=1000/impl=sketch       	37914292	        31.73 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=1000/impl=sketch       	37893240	        31.80 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=1000/impl=sketch       	37930171	        31.64 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=1000/impl=sketch       	37914790	        31.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=1000/impl=sketch       	37761478	        31.68 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=10000/impl=exact       	43394602	        27.30 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=10000/impl=exact       	41651541	        27.31 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=10000/impl=exact       	43430856	        27.16 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=10000/impl=exact       	43142060	        27.18 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=10000/impl=exact       	43357167	        27.18 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=10000/impl=exact       	43486532	        27.18 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=10000/impl=exact       	43509261	        27.11 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=10000/impl=exact       	43623408	        27.05 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=10000/impl=exact       	43232401	        27.24 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=10000/impl=exact       	43183849	        27.24 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=10000/impl=sketch      	38153830	        31.24 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=10000/impl=sketch      	38009463	        31.19 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=10000/impl=sketch      	38024368	        31.20 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=10000/impl=sketch      	38005854	        31.26 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=10000/impl=sketch      	37987455	        31.24 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=10000/impl=sketch      	37996375	        31.21 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=10000/impl=sketch      	37990762	        31.24 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=10000/impl=sketch      	37956466	        31.24 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=10000/impl=sketch      	37949613	        31.22 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreMediumCardinalitySameBucket/keys=10000/impl=sketch      	37966723	        31.23 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeyNanos/impl=exact                                  	64777911	        17.42 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeyNanos/impl=exact                                  	65232603	        17.54 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeyNanos/impl=exact                                  	69057625	        17.47 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeyNanos/impl=exact                                  	69248580	        17.50 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeyNanos/impl=exact                                  	69006166	        17.47 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeyNanos/impl=exact                                  	69126414	        17.50 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeyNanos/impl=exact                                  	68919142	        17.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeyNanos/impl=exact                                  	69239258	        17.50 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeyNanos/impl=exact                                  	69072531	        17.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeyNanos/impl=exact                                  	69193509	        17.50 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeyNanos/impl=sketch                                 	47589854	        24.83 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeyNanos/impl=sketch                                 	47919654	        24.86 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeyNanos/impl=sketch                                 	47534479	        24.83 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeyNanos/impl=sketch                                 	47563210	        24.85 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeyNanos/impl=sketch                                 	47974333	        24.85 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeyNanos/impl=sketch                                 	47579318	        25.05 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeyNanos/impl=sketch                                 	47790200	        24.83 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeyNanos/impl=sketch                                 	47740212	        24.89 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeyNanos/impl=sketch                                 	47806066	        24.84 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHotKeyNanos/impl=sketch                                 	47696886	        24.85 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreFutureReject/impl=exact                                 	138362601	         8.752 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreFutureReject/impl=exact                                 	137146996	         8.542 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreFutureReject/impl=exact                                 	136562576	         8.476 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreFutureReject/impl=exact                                 	137689675	         8.549 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreFutureReject/impl=exact                                 	137886168	         8.555 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreFutureReject/impl=exact                                 	138718066	         8.464 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreFutureReject/impl=exact                                 	137674147	         8.480 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreFutureReject/impl=exact                                 	137611147	         8.591 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreFutureReject/impl=exact                                 	137445630	         8.602 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreFutureReject/impl=exact                                 	138571162	         8.494 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreFutureReject/impl=sketch                                	125147172	         9.396 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreFutureReject/impl=sketch                                	126710452	         9.557 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreFutureReject/impl=sketch                                	126574333	         9.413 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreFutureReject/impl=sketch                                	126213788	         9.423 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreFutureReject/impl=sketch                                	126257970	         9.414 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreFutureReject/impl=sketch                                	125055846	         9.425 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreFutureReject/impl=sketch                                	126893398	         9.437 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreFutureReject/impl=sketch                                	126658198	         9.401 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreFutureReject/impl=sketch                                	124809156	         9.398 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreFutureReject/impl=sketch                                	125065131	         9.430 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=off/impl=exact                  	47489799	        25.09 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=off/impl=exact                  	47882845	        24.89 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=off/impl=exact                  	48351435	        24.87 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=off/impl=exact                  	48217702	        24.90 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=off/impl=exact                  	48307557	        24.82 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=off/impl=exact                  	48400758	        24.86 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=off/impl=exact                  	48364750	        24.85 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=off/impl=exact                  	48585453	        24.86 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=off/impl=exact                  	48260282	        24.86 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=off/impl=exact                  	48293868	        24.99 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=off/impl=sketch                 	 3481902	       345.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=off/impl=sketch                 	 3476834	       345.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=off/impl=sketch                 	 3475844	       345.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=off/impl=sketch                 	 3478876	       344.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=off/impl=sketch                 	 3476024	       345.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=off/impl=sketch                 	 3477745	       346.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=off/impl=sketch                 	 3484052	       345.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=off/impl=sketch                 	 3479960	       345.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=off/impl=sketch                 	 3484093	       346.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=off/impl=sketch                 	 3487336	       344.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=on/impl=exact                   	45278391	        26.52 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=on/impl=exact                   	45614584	        26.32 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=on/impl=exact                   	45712252	        26.40 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=on/impl=exact                   	45800143	        26.34 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=on/impl=exact                   	45475143	        26.36 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=on/impl=exact                   	45796282	        26.35 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=on/impl=exact                   	45369549	        26.35 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=on/impl=exact                   	45700284	        26.33 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=on/impl=exact                   	45789000	        26.33 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=on/impl=exact                   	45658698	        26.34 ns/op	      26 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=on/impl=sketch                  	 3462376	       346.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=on/impl=sketch                  	 3455142	       347.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=on/impl=sketch                  	 3463958	       347.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=on/impl=sketch                  	 3464248	       347.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=on/impl=sketch                  	 3454586	       347.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=on/impl=sketch                  	 3468606	       346.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=on/impl=sketch                  	 3452875	       348.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=on/impl=sketch                  	 3456669	       347.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=on/impl=sketch                  	 3462088	       346.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreAdvancingHighWater/skew=on/impl=sketch                  	 3453814	       348.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyStateWithSkew/keys=100000/impl=exact              	33201505	        36.40 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyStateWithSkew/keys=100000/impl=exact              	33403615	        35.80 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyStateWithSkew/keys=100000/impl=exact              	33430980	        35.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyStateWithSkew/keys=100000/impl=exact              	33378918	        35.99 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyStateWithSkew/keys=100000/impl=exact              	33224026	        36.03 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyStateWithSkew/keys=100000/impl=exact              	33371295	        35.82 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyStateWithSkew/keys=100000/impl=exact              	33455119	        35.89 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyStateWithSkew/keys=100000/impl=exact              	33028521	        36.10 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyStateWithSkew/keys=100000/impl=exact              	33269259	        36.03 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyStateWithSkew/keys=100000/impl=exact              	33219561	        36.05 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyStateWithSkew/keys=100000/impl=sketch             	 1589644	       754.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyStateWithSkew/keys=100000/impl=sketch             	 1589472	       755.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyStateWithSkew/keys=100000/impl=sketch             	 1587614	       754.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyStateWithSkew/keys=100000/impl=sketch             	 1590237	       753.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyStateWithSkew/keys=100000/impl=sketch             	 1591677	       754.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyStateWithSkew/keys=100000/impl=sketch             	 1589330	       754.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyStateWithSkew/keys=100000/impl=sketch             	 1589600	       754.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyStateWithSkew/keys=100000/impl=sketch             	 1590495	       753.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyStateWithSkew/keys=100000/impl=sketch             	 1592293	       754.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreSteadyStateWithSkew/keys=100000/impl=sketch             	 1587625	       753.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDense/impl=exact                                        	18234864	        55.43 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDense/impl=exact                                        	19107340	        62.29 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDense/impl=exact                                        	19117057	        60.76 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDense/impl=exact                                        	19309768	        57.67 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDense/impl=exact                                        	22685452	        52.95 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDense/impl=exact                                        	23026478	        53.16 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDense/impl=exact                                        	19101790	        62.19 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDense/impl=exact                                        	19190174	        61.70 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDense/impl=exact                                        	19256716	        52.97 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDense/impl=exact                                        	19285291	        61.89 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDense/impl=sketch                                       	29282397	        40.26 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDense/impl=sketch                                       	29631458	        40.16 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDense/impl=sketch                                       	29634080	        40.13 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDense/impl=sketch                                       	29589264	        40.19 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDense/impl=sketch                                       	29422130	        40.17 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDense/impl=sketch                                       	29635849	        40.18 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDense/impl=sketch                                       	29658310	        40.33 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDense/impl=sketch                                       	29614273	        40.20 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDense/impl=sketch                                       	29447400	        40.19 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDense/impl=sketch                                       	29619816	        40.19 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1/impl=exact                             	34872820	        34.08 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1/impl=exact                             	35258828	        33.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1/impl=exact                             	35366694	        33.95 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1/impl=exact                             	35245675	        33.83 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1/impl=exact                             	35280038	        33.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1/impl=exact                             	35480080	        33.84 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1/impl=exact                             	31664670	        34.00 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1/impl=exact                             	31460521	        33.77 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1/impl=exact                             	31752156	        33.72 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1/impl=exact                             	31756112	        33.65 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1/impl=sketch                            	 1595439	       751.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1/impl=sketch                            	 1592668	       752.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1/impl=sketch                            	 1594626	       752.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1/impl=sketch                            	 1592598	       751.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1/impl=sketch                            	 1597387	       753.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1/impl=sketch                            	 1592317	       752.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1/impl=sketch                            	 1593898	       752.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1/impl=sketch                            	 1595058	       752.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1/impl=sketch                            	 1594989	       752.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1/impl=sketch                            	 1592846	       751.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10/impl=exact                            	32014868	        33.79 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10/impl=exact                            	33170666	        33.70 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10/impl=exact                            	33143640	        33.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10/impl=exact                            	33388167	        33.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10/impl=exact                            	33467474	        33.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10/impl=exact                            	33497446	        33.55 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10/impl=exact                            	33424980	        33.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10/impl=exact                            	33474553	        33.47 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10/impl=exact                            	33329244	        33.50 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10/impl=exact                            	33539031	        33.40 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10/impl=sketch                           	 2561121	       464.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10/impl=sketch                           	 2579211	       469.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10/impl=sketch                           	 2556033	       469.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10/impl=sketch                           	 2575741	       468.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10/impl=sketch                           	 2574955	       467.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10/impl=sketch                           	 2576178	       470.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10/impl=sketch                           	 2573394	       470.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10/impl=sketch                           	 2572344	       468.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10/impl=sketch                           	 2578200	       468.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10/impl=sketch                           	 2579256	       468.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=30/impl=exact                            	31683342	        35.95 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=30/impl=exact                            	32662503	        35.99 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=30/impl=exact                            	32527854	        36.32 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=30/impl=exact                            	32417026	        36.15 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=30/impl=exact                            	32409584	        35.91 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=30/impl=exact                            	32467312	        35.99 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=30/impl=exact                            	31990437	        36.08 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=30/impl=exact                            	32382619	        35.91 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=30/impl=exact                            	32468557	        36.01 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=30/impl=exact                            	32624024	        35.96 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=30/impl=sketch                           	 4214992	       275.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=30/impl=sketch                           	 4210959	       282.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=30/impl=sketch                           	 4317108	       277.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=30/impl=sketch                           	 4348083	       280.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=30/impl=sketch                           	 4164529	       278.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=30/impl=sketch                           	 4069827	       280.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=30/impl=sketch                           	 4111005	       279.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=30/impl=sketch                           	 4077302	       281.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=30/impl=sketch                           	 4099797	       279.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=30/impl=sketch                           	 4070161	       282.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=100/impl=exact                           	32448436	        36.10 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=100/impl=exact                           	32969032	        36.06 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=100/impl=exact                           	33207152	        35.96 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=100/impl=exact                           	33478017	        35.99 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=100/impl=exact                           	33244987	        36.05 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=100/impl=exact                           	33416216	        36.12 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=100/impl=exact                           	33357037	        36.12 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=100/impl=exact                           	33416409	        35.97 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=100/impl=exact                           	33569132	        35.95 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=100/impl=exact                           	33439845	        36.01 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=100/impl=sketch                          	 9673472	       122.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=100/impl=sketch                          	 9710894	       123.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=100/impl=sketch                          	 8862832	       123.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=100/impl=sketch                          	 9297361	       123.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=100/impl=sketch                          	 8876160	       122.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=100/impl=sketch                          	 9198238	       123.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=100/impl=sketch                          	 8913344	       122.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=100/impl=sketch                          	 9755852	       123.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=100/impl=sketch                          	 8855997	       122.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=100/impl=sketch                          	 9244828	       123.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=300/impl=exact                           	28609574	        41.77 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=300/impl=exact                           	28149795	        42.09 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=300/impl=exact                           	28201645	        42.00 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=300/impl=exact                           	28142451	        42.12 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=300/impl=exact                           	28250970	        42.23 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=300/impl=exact                           	28158740	        42.20 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=300/impl=exact                           	28299216	        42.20 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=300/impl=exact                           	28378185	        42.05 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=300/impl=exact                           	28143248	        42.23 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=300/impl=exact                           	28363206	        42.13 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=300/impl=sketch                          	19226378	        61.93 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=300/impl=sketch                          	19093989	        61.95 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=300/impl=sketch                          	19178340	        61.89 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=300/impl=sketch                          	19045162	        61.88 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=300/impl=sketch                          	19259653	        61.98 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=300/impl=sketch                          	19168435	        61.91 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=300/impl=sketch                          	19173309	        61.89 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=300/impl=sketch                          	19174740	        61.91 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=300/impl=sketch                          	19188576	        61.90 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=300/impl=sketch                          	19126438	        61.95 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1000/impl=exact                          	18384616	        62.61 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1000/impl=exact                          	18923998	        61.75 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1000/impl=exact                          	19281843	        53.66 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1000/impl=exact                          	19262719	        61.88 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1000/impl=exact                          	19297774	        61.80 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1000/impl=exact                          	19305756	        55.38 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1000/impl=exact                          	23061234	        52.93 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1000/impl=exact                          	19278708	        62.08 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1000/impl=exact                          	19259756	        61.95 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1000/impl=exact                          	19088674	        62.04 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1000/impl=sketch                         	29627404	        40.37 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1000/impl=sketch                         	29418704	        40.41 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1000/impl=sketch                         	29446708	        40.41 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1000/impl=sketch                         	29374806	        40.42 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1000/impl=sketch                         	29439453	        40.42 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1000/impl=sketch                         	29534583	        40.44 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1000/impl=sketch                         	29450290	        40.39 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1000/impl=sketch                         	29600758	        40.42 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1000/impl=sketch                         	29473347	        40.42 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=1000/impl=sketch                         	29581027	        40.45 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10000/impl=exact                         	18438537	        70.16 ns/op	      16 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10000/impl=exact                         	18555014	        70.44 ns/op	      16 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10000/impl=exact                         	18768841	        70.43 ns/op	      16 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10000/impl=exact                         	18703278	        68.61 ns/op	      16 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10000/impl=exact                         	18661382	        69.68 ns/op	      16 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10000/impl=exact                         	18764769	        69.38 ns/op	      16 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10000/impl=exact                         	18313480	        69.57 ns/op	      16 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10000/impl=exact                         	18809218	        68.33 ns/op	      16 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10000/impl=exact                         	18777163	        69.86 ns/op	      16 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10000/impl=exact                         	18830986	        69.63 ns/op	      16 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10000/impl=sketch                        	37418682	        31.78 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10000/impl=sketch                        	37680009	        31.79 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10000/impl=sketch                        	37633185	        31.80 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10000/impl=sketch                        	37673847	        31.79 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10000/impl=sketch                        	37559762	        31.78 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10000/impl=sketch                        	37705168	        31.80 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10000/impl=sketch                        	37596193	        31.79 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10000/impl=sketch                        	37697272	        31.89 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10000/impl=sketch                        	37494385	        31.79 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreDensity/events=10000/impl=sketch                        	37557410	        31.78 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=60/density=dense                  	30042496	        38.95 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=60/density=dense                  	30856161	        38.83 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=60/density=dense                  	30910772	        38.84 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=60/density=dense                  	30901387	        38.80 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=60/density=dense                  	30898502	        38.86 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=60/density=dense                  	30940992	        38.85 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=60/density=dense                  	30790414	        38.89 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=60/density=dense                  	30695246	        38.83 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=60/density=dense                  	30795880	        38.84 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=60/density=dense                  	30942588	        38.84 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=60/density=sparse                 	 2633089	       454.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=60/density=sparse                 	 2615833	       452.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=60/density=sparse                 	 2613018	       452.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=60/density=sparse                 	 2609636	       452.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=60/density=sparse                 	 2608191	       453.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=60/density=sparse                 	 2607313	       453.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=60/density=sparse                 	 2608638	       452.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=60/density=sparse                 	 2617994	       452.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=60/density=sparse                 	 2608728	       452.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=60/density=sparse                 	 2615398	       452.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=1800/density=dense                	30152742	        40.00 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=1800/density=dense                	30100774	        39.69 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=1800/density=dense                	30212176	        39.66 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=1800/density=dense                	30251877	        39.58 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=1800/density=dense                	30077542	        39.66 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=1800/density=dense                	30294868	        39.64 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=1800/density=dense                	30210529	        39.63 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=1800/density=dense                	30205016	        39.93 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=1800/density=dense                	30266948	        39.66 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=1800/density=dense                	30263131	        39.66 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=1800/density=sparse               	 1674825	       716.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=1800/density=sparse               	 1669168	       717.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=1800/density=sparse               	 1670209	       717.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=1800/density=sparse               	 1671793	       717.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=1800/density=sparse               	 1672801	       717.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=1800/density=sparse               	 1663414	       716.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=1800/density=sparse               	 1667004	       717.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=1800/density=sparse               	 1672276	       716.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=1800/density=sparse               	 1670691	       718.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreWindowBuckets/buckets=1800/density=sparse               	 1668364	       718.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=1                                    	 3481486	       343.8 ns/op	         1.000 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=1                                    	 3477006	       346.3 ns/op	         1.000 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=1                                    	 3476319	       345.0 ns/op	         1.000 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=1                                    	 3469189	       343.7 ns/op	         1.000 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=1                                    	 3477306	       346.0 ns/op	         1.000 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=1                                    	 3470739	       345.3 ns/op	         1.000 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=1                                    	 3481092	       345.1 ns/op	         1.000 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=1                                    	 3497379	       345.0 ns/op	         1.000 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=1                                    	 3476097	       345.1 ns/op	         1.000 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=1                                    	 3482102	       343.8 ns/op	         1.000 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=quarter                              	    8383	    145525 ns/op	       450.0 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=quarter                              	    8551	    145793 ns/op	       450.0 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=quarter                              	    8366	    145919 ns/op	       450.0 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=quarter                              	    8538	    145620 ns/op	       450.0 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=quarter                              	    8541	    145038 ns/op	       450.0 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=quarter                              	    8437	    145945 ns/op	       450.0 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=quarter                              	    8503	    145774 ns/op	       450.0 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=quarter                              	    8532	    145365 ns/op	       450.0 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=quarter                              	    8516	    145083 ns/op	       450.0 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=quarter                              	    8539	    145235 ns/op	       450.0 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=half                                 	    4132	    290094 ns/op	       900.0 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=half                                 	    4255	    290079 ns/op	       900.0 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=half                                 	    4105	    290378 ns/op	       900.0 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=half                                 	    4131	    289489 ns/op	       900.0 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=half                                 	    4095	    286345 ns/op	       900.0 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=half                                 	    4128	    292535 ns/op	       900.0 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=half                                 	    4104	    292586 ns/op	       900.0 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=half                                 	    4142	    292124 ns/op	       900.0 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=half                                 	    4140	    291736 ns/op	       900.0 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=half                                 	    4106	    288507 ns/op	       900.0 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=window                               	    2116	    559812 ns/op	      1800 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=window                               	    2136	    561064 ns/op	      1800 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=window                               	    2138	    560975 ns/op	      1800 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=window                               	    2142	    562093 ns/op	      1800 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=window                               	    2139	    561475 ns/op	      1800 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=window                               	    2145	    561101 ns/op	      1800 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=window                               	    2140	    561683 ns/op	      1800 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=window                               	    2126	    560166 ns/op	      1800 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=window                               	    2133	    562100 ns/op	      1800 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkStoreHighWaterJump/jump=window                               	    2131	    560552 ns/op	      1800 expired-slots/op	       0 B/op	       0 allocs/op
+BenchmarkMemoryFootprint/impl=exact                                   	      18	  59768377 ns/op	       195.0 bytes/key	34989889 B/op	  600792 allocs/op
+BenchmarkMemoryFootprint/impl=exact                                   	      18	  59629868 ns/op	       195.0 bytes/key	34989887 B/op	  600792 allocs/op
+BenchmarkMemoryFootprint/impl=exact                                   	      18	  59925894 ns/op	       195.0 bytes/key	34989887 B/op	  600792 allocs/op
+BenchmarkMemoryFootprint/impl=exact                                   	      18	  60283975 ns/op	       195.0 bytes/key	34989889 B/op	  600792 allocs/op
+BenchmarkMemoryFootprint/impl=exact                                   	      18	  59953720 ns/op	       195.0 bytes/key	34989888 B/op	  600792 allocs/op
+BenchmarkMemoryFootprint/impl=exact                                   	      18	  60658894 ns/op	       195.0 bytes/key	34989886 B/op	  600792 allocs/op
+BenchmarkMemoryFootprint/impl=exact                                   	      18	  60651907 ns/op	       195.0 bytes/key	34989891 B/op	  600792 allocs/op
+BenchmarkMemoryFootprint/impl=exact                                   	      18	  60605141 ns/op	       195.0 bytes/key	34989889 B/op	  600792 allocs/op
+BenchmarkMemoryFootprint/impl=exact                                   	      18	  60339234 ns/op	       195.0 bytes/key	34989885 B/op	  600792 allocs/op
+BenchmarkMemoryFootprint/impl=exact                                   	      18	  60336556 ns/op	       195.0 bytes/key	34989887 B/op	  600792 allocs/op
+BenchmarkMemoryFootprint/impl=sketch/keys=100000                      	      32	  36255648 ns/op	 196409600 estimate-bytes	 196591872 heap-bytes	196591872 B/op	      83 allocs/op
+BenchmarkMemoryFootprint/impl=sketch/keys=100000                      	      30	  36307843 ns/op	 196409600 estimate-bytes	 196591872 heap-bytes	196591872 B/op	      83 allocs/op
+BenchmarkMemoryFootprint/impl=sketch/keys=100000                      	      30	  36329000 ns/op	 196409600 estimate-bytes	 196591872 heap-bytes	196591872 B/op	      83 allocs/op
+BenchmarkMemoryFootprint/impl=sketch/keys=100000                      	      30	  36251993 ns/op	 196409600 estimate-bytes	 196591872 heap-bytes	196591872 B/op	      83 allocs/op
+BenchmarkMemoryFootprint/impl=sketch/keys=100000                      	      30	  36220890 ns/op	 196409600 estimate-bytes	 196591872 heap-bytes	196591872 B/op	      83 allocs/op
+BenchmarkMemoryFootprint/impl=sketch/keys=100000                      	      30	  36277644 ns/op	 196409600 estimate-bytes	 196591872 heap-bytes	196591872 B/op	      83 allocs/op
+BenchmarkMemoryFootprint/impl=sketch/keys=100000                      	      30	  36285431 ns/op	 196409600 estimate-bytes	 196591872 heap-bytes	196591872 B/op	      83 allocs/op
+BenchmarkMemoryFootprint/impl=sketch/keys=100000                      	      30	  36253682 ns/op	 196409600 estimate-bytes	 196591872 heap-bytes	196591872 B/op	      83 allocs/op
+BenchmarkMemoryFootprint/impl=sketch/keys=100000                      	      30	  36243424 ns/op	 196409600 estimate-bytes	 196591872 heap-bytes	196591872 B/op	      83 allocs/op
+BenchmarkMemoryFootprint/impl=sketch/keys=100000                      	      30	  36237643 ns/op	 196409600 estimate-bytes	 196591872 heap-bytes	196591872 B/op	      83 allocs/op
+BenchmarkMemoryFootprint/impl=sketch/keys=1000000                     	       4	 325478052 ns/op	 196409600 estimate-bytes	 196591872 heap-bytes	196591872 B/op	      83 allocs/op
+BenchmarkMemoryFootprint/impl=sketch/keys=1000000                     	       4	 325589031 ns/op	 196409600 estimate-bytes	 196591872 heap-bytes	196591872 B/op	      83 allocs/op
+BenchmarkMemoryFootprint/impl=sketch/keys=1000000                     	       4	 328701948 ns/op	 196409600 estimate-bytes	 196591872 heap-bytes	196591872 B/op	      83 allocs/op
+BenchmarkMemoryFootprint/impl=sketch/keys=1000000                     	       4	 328725177 ns/op	 196409600 estimate-bytes	 196591872 heap-bytes	196591872 B/op	      83 allocs/op
+BenchmarkMemoryFootprint/impl=sketch/keys=1000000                     	       4	 326301552 ns/op	 196409600 estimate-bytes	 196591872 heap-bytes	196591872 B/op	      83 allocs/op
+BenchmarkMemoryFootprint/impl=sketch/keys=1000000                     	       4	 325780136 ns/op	 196409600 estimate-bytes	 196591872 heap-bytes	196591872 B/op	      83 allocs/op
+BenchmarkMemoryFootprint/impl=sketch/keys=1000000                     	       4	 326035458 ns/op	 196409600 estimate-bytes	 196591872 heap-bytes	196591872 B/op	      83 allocs/op
+BenchmarkMemoryFootprint/impl=sketch/keys=1000000                     	       4	 328623125 ns/op	 196409600 estimate-bytes	 196591872 heap-bytes	196591872 B/op	      83 allocs/op
+BenchmarkMemoryFootprint/impl=sketch/keys=1000000                     	       4	 326424427 ns/op	 196409600 estimate-bytes	 196591872 heap-bytes	196591872 B/op	      83 allocs/op
+BenchmarkMemoryFootprint/impl=sketch/keys=1000000                     	       4	 326403031 ns/op	 196409600 estimate-bytes	 196591872 heap-bytes	196591872 B/op	      83 allocs/op
+PASS
+ok  	github.com/mresti/slidingcache/countminsketch	1008.154s

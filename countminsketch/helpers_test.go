@@ -65,30 +65,36 @@ func shardBitsOf(layout windowLayout) uint {
 }
 
 // requireCollisionFree proves the precondition of Mode A instead of assuming
-// it: with every hash added once to a sketch of its shard's dimensions, each
-// must be alone in at least one row among the hashes of its shard, which is
-// exactly when its estimate is 1. Then every estimate in the window is the
-// exact count, whatever the counts of the other keys.
+// it: with every hash added once to a classic sketch of its shard's dimensions,
+// each must be alone in at least one row among the hashes of its shard, which
+// is exactly when its classic estimate is 1. The classic update is what makes
+// that equivalence hold: under the conservative update of the ring a hash that
+// shares every row can still read 1 after one add each. A hash alone in one row
+// is the only one that ever raises that row's cell, and the conservative update
+// raises it on each of the hash's adds: in each slot the cell holds the hash's
+// count there, and the smallest of the hash's cells is never below that count.
+// So every estimate in the window is the exact count, whatever the counts of
+// the other keys.
 func requireCollisionFree(t *testing.T, cfg Config, hashes []uint64) {
 	t.Helper()
 	layout := mustLayout(t, cfg)
-	rings := make(map[uint64]*countmin.Ring)
-	ringOf := func(h uint64) *countmin.Ring {
+	sketches := make(map[uint64]*countmin.Sketch)
+	sketchOf := func(h uint64) *countmin.Sketch {
 		shard := countmin.ShardOf(h, shardBitsOf(layout))
-		if rings[shard] == nil {
-			ring, err := countmin.NewRing(layout.shardWidth, layout.depth, 1)
+		if sketches[shard] == nil {
+			s, err := countmin.NewSized(layout.shardWidth, layout.depth)
 			if err != nil {
-				t.Fatalf("NewRing(%d, %d, 1): %v", layout.shardWidth, layout.depth, err)
+				t.Fatalf("NewSized(%d, %d): %v", layout.shardWidth, layout.depth, err)
 			}
-			rings[shard] = ring
+			sketches[shard] = s
 		}
-		return rings[shard]
+		return sketches[shard]
 	}
 	for _, h := range hashes {
-		ringOf(h).Add(0, h)
+		sketchOf(h).AddHash(h)
 	}
 	for i, h := range hashes {
-		if got := ringOf(h).Count(h); got != 1 {
+		if got := sketchOf(h).CountHash(h); got != 1 {
 			t.Fatalf("hash %d (%#x) estimates %d after one add each at %dx%d per shard, want 1: the hashes collide",
 				i, h, got, layout.shardWidth, layout.depth)
 		}
@@ -118,18 +124,49 @@ func requireShardsSharedAndSpanned(t *testing.T, c *Cache) {
 }
 
 // reseedUntilShardsSharedAndSpanned redraws the default hash's seed of a fresh
-// cache until testKeys share and span its shards. The seed is random, so this
-// is how Mode B, which keeps the default hash, gets the same coverage as Mode A.
-func reseedUntilShardsSharedAndSpanned(t *testing.T, c *Cache) {
+// cache until testKeys share and span its shards and, with more than one row,
+// two keys of a shard collide partly. The seed is random, so this is how Mode
+// B, which keeps the default hash, gets the same coverage as Mode A, and how
+// it reaches the case the conservative update handles differently from the
+// classic one: a key whose rows are not all shared.
+func reseedUntilShardsSharedAndSpanned(t *testing.T, c *Cache, layout windowLayout) {
 	t.Helper()
 	const attempts = 1_000
 	for range attempts {
-		if keysShareAndSpanShards(c, testKeys[:]) {
+		if keysShareAndSpanShards(c, testKeys[:]) && (layout.depth == 1 || keysCollidePartly(t, c, layout)) {
 			return
 		}
 		c.seed = maphash.MakeSeed()
 	}
 	requireShardsSharedAndSpanned(t, c)
+	t.Fatalf("no seed in %d made two of testKeys share some but not all of %d rows", attempts, layout.depth)
+}
+
+// keysCollidePartly reports whether two of testKeys in the same shard share
+// the cell of at least one row but not of every row.
+func keysCollidePartly(t *testing.T, c *Cache, layout windowLayout) bool {
+	t.Helper()
+	cells := make([][]int, len(testKeys))
+	for i, key := range testKeys {
+		cells[i] = cellsOf(t, layout.shardWidth, layout.depth, c.hashOf(key))
+	}
+	for i := range testKeys {
+		for j := i + 1; j < len(testKeys); j++ {
+			if c.shardOf(testKeys[i]) != c.shardOf(testKeys[j]) {
+				continue
+			}
+			shared := 0
+			for r := range layout.depth {
+				if cells[i][r] == cells[j][r] {
+					shared++
+				}
+			}
+			if shared > 0 && shared < layout.depth {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func newTestCache(t *testing.T, cfg Config, opts ...Option) *Cache {

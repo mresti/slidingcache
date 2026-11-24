@@ -1,0 +1,236 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/mresti/slidingcache/countminsketch
+cpu: Apple M2
+                                                        │ benchmarks/countminsketch-phase3-serial.txt │ benchmarks/countminsketch-phase5-serial.txt │
+                                                        │                   sec/op                    │       sec/op         vs base                │
+StoreSingleKey/impl=exact                                                                 24.42n ± 0%          24.42n ±  0%        ~ (p=0.870 n=10)
+StoreSingleKey/impl=sketch                                                                342.1n ± 0%          348.1n ±  0%   +1.77% (p=0.000 n=10)
+StoreManyKeys/impl=exact                                                                  33.60n ± 0%          33.62n ±  0%        ~ (p=0.985 n=10)
+StoreManyKeys/impl=sketch                                                                 764.8n ± 0%          760.4n ±  1%        ~ (p=0.324 n=10)
+GetHit/impl=exact                                                                         16.60n ± 0%          16.50n ±  1%   -0.54% (p=0.037 n=10)
+GetHit/impl=sketch                                                                        16.40n ± 0%          16.57n ±  0%   +1.04% (p=0.000 n=10)
+GetMiss/impl=exact                                                                        14.88n ± 0%          14.74n ±  0%   -0.91% (p=0.000 n=10)
+GetMiss/impl=sketch                                                                       16.66n ± 1%          16.58n ±  2%        ~ (p=0.384 n=10)
+StoreSteadyState/keys=1000/impl=exact                                                     29.00n ± 1%          29.47n ±  1%   +1.60% (p=0.001 n=10)
+StoreSteadyState/keys=1000/impl=sketch                                                    705.7n ± 3%          708.8n ±  1%        ~ (p=0.393 n=10)
+StoreSteadyState/keys=100000/impl=exact                                                   33.55n ± 1%          33.35n ±  1%   -0.60% (p=0.041 n=10)
+StoreSteadyState/keys=100000/impl=sketch                                                  758.8n ± 1%          752.6n ±  0%   -0.82% (p=0.000 n=10)
+StoreLateReject/impl=exact                                                                7.433n ± 2%          7.362n ±  0%   -0.95% (p=0.000 n=10)
+StoreLateReject/impl=sketch                                                               8.437n ± 9%          8.188n ±  6%        ~ (p=0.315 n=10)
+GetHitManyKeys/impl=exact                                                                 27.75n ± 1%          27.88n ±  0%   +0.47% (p=0.050 n=10)
+GetHitManyKeys/impl=sketch                                                                16.72n ± 0%          16.62n ±  0%   -0.57% (p=0.000 n=10)
+StoreOutOfOrder/impl=exact                                                                59.06n ± 0%          59.28n ±  0%        ~ (p=0.165 n=10)
+StoreOutOfOrder/impl=sketch                                                               235.4n ± 1%          240.9n ±  0%   +2.32% (p=0.000 n=10)
+StoreHotKeySameBucket/impl=exact                                                          17.56n ± 0%          17.62n ±  0%        ~ (p=0.091 n=10)
+StoreHotKeySameBucket/impl=sketch                                                         20.49n ± 3%          24.78n ±  0%  +20.91% (p=0.000 n=10)
+StoreMediumCardinalitySameBucket/keys=100/impl=exact                                      25.46n ± 1%          25.45n ±  1%        ~ (p=0.591 n=10)
+StoreMediumCardinalitySameBucket/keys=100/impl=sketch                                     25.17n ± 1%          31.05n ±  0%  +23.36% (p=0.000 n=10)
+StoreMediumCardinalitySameBucket/keys=1000/impl=exact                                     24.12n ± 2%          24.47n ±  2%        ~ (p=0.224 n=10)
+StoreMediumCardinalitySameBucket/keys=1000/impl=sketch                                    25.79n ± 0%          31.72n ±  0%  +23.02% (p=0.000 n=10)
+StoreMediumCardinalitySameBucket/keys=10000/impl=exact                                    27.41n ± 2%          27.18n ±  0%        ~ (p=0.159 n=10)
+StoreMediumCardinalitySameBucket/keys=10000/impl=sketch                                   25.48n ± 5%          31.23n ±  0%  +22.59% (p=0.000 n=10)
+StoreHotKeyNanos/impl=exact                                                               17.56n ± 0%          17.48n ±  0%   -0.43% (p=0.000 n=10)
+StoreHotKeyNanos/impl=sketch                                                              20.84n ± 0%          24.85n ±  0%  +19.24% (p=0.000 n=10)
+StoreFutureReject/impl=exact                                                              8.822n ± 1%          8.545n ±  1%   -3.13% (p=0.000 n=10)
+StoreFutureReject/impl=sketch                                                             9.384n ± 1%          9.418n ±  0%   +0.37% (p=0.030 n=10)
+StoreAdvancingHighWater/skew=off/impl=exact                                               24.91n ± 0%          24.87n ±  1%   -0.18% (p=0.023 n=10)
+StoreAdvancingHighWater/skew=off/impl=sketch                                              339.1n ± 0%          345.3n ±  0%   +1.84% (p=0.000 n=10)
+StoreAdvancingHighWater/skew=on/impl=exact                                                26.36n ± 0%          26.34n ±  0%        ~ (p=0.366 n=10)
+StoreAdvancingHighWater/skew=on/impl=sketch                                               341.4n ± 0%          347.4n ±  0%   +1.76% (p=0.000 n=10)
+StoreSteadyStateWithSkew/keys=100000/impl=exact                                           36.36n ± 0%          36.01n ±  1%   -0.95% (p=0.000 n=10)
+StoreSteadyStateWithSkew/keys=100000/impl=sketch                                          751.8n ± 4%          754.4n ±  0%        ~ (p=0.138 n=10)
+StoreDense/impl=exact                                                                     62.06n ± 5%          59.22n ± 11%        ~ (p=0.050 n=10)
+StoreDense/impl=sketch                                                                    35.58n ± 2%          40.19n ±  0%  +12.94% (p=0.000 n=10)
+StoreWindowBuckets/buckets=60/density=dense                                               34.04n ± 0%          38.84n ±  0%  +14.08% (p=0.000 n=10)
+StoreWindowBuckets/buckets=60/density=sparse                                              450.7n ± 0%          452.7n ±  0%   +0.44% (p=0.000 n=10)
+StoreWindowBuckets/buckets=1800/density=dense                                             35.02n ± 1%          39.66n ±  1%  +13.27% (p=0.000 n=10)
+StoreWindowBuckets/buckets=1800/density=sparse                                            711.2n ± 0%          717.2n ±  0%   +0.84% (p=0.000 n=10)
+StoreHighWaterJump/jump=1                                                                 338.0n ± 0%          345.1n ±  0%   +2.09% (p=0.000 n=10)
+StoreHighWaterJump/jump=quarter                                                           144.3µ ± 1%          145.6µ ±  0%   +0.89% (p=0.000 n=10)
+StoreHighWaterJump/jump=half                                                              291.2µ ± 2%          290.2µ ±  1%        ~ (p=0.853 n=10)
+StoreHighWaterJump/jump=window                                                            558.6µ ± 0%          561.1µ ±  0%   +0.44% (p=0.000 n=10)
+MemoryFootprint/impl=exact                                                                59.89m ± 1%          60.31m ±  1%        ~ (p=0.190 n=10)
+MemoryFootprint/impl=sketch/keys=100000                                                   31.32m ± 1%          36.25m ±  0%  +15.75% (p=0.000 n=10)
+MemoryFootprint/impl=sketch/keys=1000000                                                  279.1m ± 1%          326.4m ±  1%  +16.92% (p=0.000 n=10)
+StoreDensity/events=1/impl=exact                                                                               33.85n ±  0%
+StoreDensity/events=1/impl=sketch                                                                              752.2n ±  0%
+StoreDensity/events=10/impl=exact                                                                              33.47n ±  1%
+StoreDensity/events=10/impl=sketch                                                                             468.7n ±  0%
+StoreDensity/events=30/impl=exact                                                                              35.99n ±  0%
+StoreDensity/events=30/impl=sketch                                                                             279.9n ±  1%
+StoreDensity/events=100/impl=exact                                                                             36.03n ±  0%
+StoreDensity/events=100/impl=sketch                                                                            123.1n ±  0%
+StoreDensity/events=300/impl=exact                                                                             42.12n ±  0%
+StoreDensity/events=300/impl=sketch                                                                            61.91n ±  0%
+StoreDensity/events=1000/impl=exact                                                                            61.84n ± 13%
+StoreDensity/events=1000/impl=sketch                                                                           40.42n ±  0%
+StoreDensity/events=10000/impl=exact                                                                           69.65n ±  2%
+StoreDensity/events=10000/impl=sketch                                                                          31.79n ±  0%
+geomean                                                                                   200.7n               166.6n         +3.47%
+
+                                                        │ benchmarks/countminsketch-phase3-serial.txt │ benchmarks/countminsketch-phase5-serial.txt │
+                                                        │                    B/op                     │        B/op         vs base                 │
+StoreSingleKey/impl=exact                                                                26.00 ± 0%             26.00 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSingleKey/impl=sketch                                                               0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreManyKeys/impl=exact                                                                 0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreManyKeys/impl=sketch                                                                0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+GetHit/impl=exact                                                                        0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+GetHit/impl=sketch                                                                       0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+GetMiss/impl=exact                                                                       0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+GetMiss/impl=sketch                                                                      0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyState/keys=1000/impl=exact                                                    0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyState/keys=1000/impl=sketch                                                   0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyState/keys=100000/impl=exact                                                  0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyState/keys=100000/impl=sketch                                                 0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreLateReject/impl=exact                                                               0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreLateReject/impl=sketch                                                              0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+GetHitManyKeys/impl=exact                                                                0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+GetHitManyKeys/impl=sketch                                                               0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreOutOfOrder/impl=exact                                                               18.00 ± 0%             18.00 ± 0%       ~ (p=1.000 n=10) ¹
+StoreOutOfOrder/impl=sketch                                                              0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreHotKeySameBucket/impl=exact                                                         0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreHotKeySameBucket/impl=sketch                                                        0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=100/impl=exact                                     0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=100/impl=sketch                                    0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=1000/impl=exact                                    0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=1000/impl=sketch                                   0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=10000/impl=exact                                   0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=10000/impl=sketch                                  0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreHotKeyNanos/impl=exact                                                              0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreHotKeyNanos/impl=sketch                                                             0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreFutureReject/impl=exact                                                             0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreFutureReject/impl=sketch                                                            0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreAdvancingHighWater/skew=off/impl=exact                                              26.00 ± 0%             26.00 ± 0%       ~ (p=1.000 n=10) ¹
+StoreAdvancingHighWater/skew=off/impl=sketch                                             0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreAdvancingHighWater/skew=on/impl=exact                                               26.00 ± 0%             26.00 ± 0%       ~ (p=1.000 n=10) ¹
+StoreAdvancingHighWater/skew=on/impl=sketch                                              0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyStateWithSkew/keys=100000/impl=exact                                          0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyStateWithSkew/keys=100000/impl=sketch                                         0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreDense/impl=exact                                                                    0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreDense/impl=sketch                                                                   0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreWindowBuckets/buckets=60/density=dense                                              0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreWindowBuckets/buckets=60/density=sparse                                             0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreWindowBuckets/buckets=1800/density=dense                                            0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreWindowBuckets/buckets=1800/density=sparse                                           0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreHighWaterJump/jump=1                                                                0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreHighWaterJump/jump=quarter                                                          0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreHighWaterJump/jump=half                                                             0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreHighWaterJump/jump=window                                                           0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+MemoryFootprint/impl=exact                                                             33.37Mi ± 0%           33.37Mi ± 0%       ~ (p=0.438 n=10)
+MemoryFootprint/impl=sketch/keys=100000                                                187.5Mi ± 0%           187.5Mi ± 0%       ~ (p=1.000 n=10) ¹
+MemoryFootprint/impl=sketch/keys=1000000                                               187.5Mi ± 0%           187.5Mi ± 0%       ~ (p=1.000 n=10) ¹
+StoreDensity/events=1/impl=exact                                                                                0.000 ± 0%
+StoreDensity/events=1/impl=sketch                                                                               0.000 ± 0%
+StoreDensity/events=10/impl=exact                                                                               0.000 ± 0%
+StoreDensity/events=10/impl=sketch                                                                              0.000 ± 0%
+StoreDensity/events=30/impl=exact                                                                               0.000 ± 0%
+StoreDensity/events=30/impl=sketch                                                                              0.000 ± 0%
+StoreDensity/events=100/impl=exact                                                                              0.000 ± 0%
+StoreDensity/events=100/impl=sketch                                                                             0.000 ± 0%
+StoreDensity/events=300/impl=exact                                                                              0.000 ± 0%
+StoreDensity/events=300/impl=sketch                                                                             0.000 ± 0%
+StoreDensity/events=1000/impl=exact                                                                             0.000 ± 0%
+StoreDensity/events=1000/impl=sketch                                                                            0.000 ± 0%
+StoreDensity/events=10000/impl=exact                                                                            16.00 ± 0%
+StoreDensity/events=10000/impl=sketch                                                                           0.000 ± 0%
+geomean                                                                                             ²                       -0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                                        │ benchmarks/countminsketch-phase3-serial.txt │ benchmarks/countminsketch-phase5-serial.txt │
+                                                        │                  allocs/op                  │     allocs/op       vs base                 │
+StoreSingleKey/impl=exact                                                                0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSingleKey/impl=sketch                                                               0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreManyKeys/impl=exact                                                                 0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreManyKeys/impl=sketch                                                                0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+GetHit/impl=exact                                                                        0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+GetHit/impl=sketch                                                                       0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+GetMiss/impl=exact                                                                       0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+GetMiss/impl=sketch                                                                      0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyState/keys=1000/impl=exact                                                    0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyState/keys=1000/impl=sketch                                                   0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyState/keys=100000/impl=exact                                                  0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyState/keys=100000/impl=sketch                                                 0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreLateReject/impl=exact                                                               0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreLateReject/impl=sketch                                                              0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+GetHitManyKeys/impl=exact                                                                0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+GetHitManyKeys/impl=sketch                                                               0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreOutOfOrder/impl=exact                                                               0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreOutOfOrder/impl=sketch                                                              0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreHotKeySameBucket/impl=exact                                                         0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreHotKeySameBucket/impl=sketch                                                        0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=100/impl=exact                                     0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=100/impl=sketch                                    0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=1000/impl=exact                                    0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=1000/impl=sketch                                   0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=10000/impl=exact                                   0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreMediumCardinalitySameBucket/keys=10000/impl=sketch                                  0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreHotKeyNanos/impl=exact                                                              0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreHotKeyNanos/impl=sketch                                                             0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreFutureReject/impl=exact                                                             0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreFutureReject/impl=sketch                                                            0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreAdvancingHighWater/skew=off/impl=exact                                              0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreAdvancingHighWater/skew=off/impl=sketch                                             0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreAdvancingHighWater/skew=on/impl=exact                                               0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreAdvancingHighWater/skew=on/impl=sketch                                              0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyStateWithSkew/keys=100000/impl=exact                                          0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreSteadyStateWithSkew/keys=100000/impl=sketch                                         0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreDense/impl=exact                                                                    0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreDense/impl=sketch                                                                   0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreWindowBuckets/buckets=60/density=dense                                              0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreWindowBuckets/buckets=60/density=sparse                                             0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreWindowBuckets/buckets=1800/density=dense                                            0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreWindowBuckets/buckets=1800/density=sparse                                           0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreHighWaterJump/jump=1                                                                0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreHighWaterJump/jump=quarter                                                          0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreHighWaterJump/jump=half                                                             0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreHighWaterJump/jump=window                                                           0.000 ± 0%             0.000 ± 0%       ~ (p=1.000 n=10) ¹
+MemoryFootprint/impl=exact                                                              600.8k ± 0%            600.8k ± 0%       ~ (p=1.000 n=10) ¹
+MemoryFootprint/impl=sketch/keys=100000                                                  83.00 ± 0%             83.00 ± 0%       ~ (p=1.000 n=10) ¹
+MemoryFootprint/impl=sketch/keys=1000000                                                 83.00 ± 0%             83.00 ± 0%       ~ (p=1.000 n=10) ¹
+StoreDensity/events=1/impl=exact                                                                                0.000 ± 0%
+StoreDensity/events=1/impl=sketch                                                                               0.000 ± 0%
+StoreDensity/events=10/impl=exact                                                                               0.000 ± 0%
+StoreDensity/events=10/impl=sketch                                                                              0.000 ± 0%
+StoreDensity/events=30/impl=exact                                                                               0.000 ± 0%
+StoreDensity/events=30/impl=sketch                                                                              0.000 ± 0%
+StoreDensity/events=100/impl=exact                                                                              0.000 ± 0%
+StoreDensity/events=100/impl=sketch                                                                             0.000 ± 0%
+StoreDensity/events=300/impl=exact                                                                              0.000 ± 0%
+StoreDensity/events=300/impl=sketch                                                                             0.000 ± 0%
+StoreDensity/events=1000/impl=exact                                                                             0.000 ± 0%
+StoreDensity/events=1000/impl=sketch                                                                            0.000 ± 0%
+StoreDensity/events=10000/impl=exact                                                                            0.000 ± 0%
+StoreDensity/events=10000/impl=sketch                                                                           0.000 ± 0%
+geomean                                                                                             ²                       +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                │ benchmarks/countminsketch-phase3-serial.txt │ benchmarks/countminsketch-phase5-serial.txt │
+                                │              expired-slots/op               │  expired-slots/op   vs base                 │
+StoreHighWaterJump/jump=1                                          1.000 ± 0%           1.000 ± 0%       ~ (p=1.000 n=10) ¹
+StoreHighWaterJump/jump=quarter                                    450.0 ± 0%           450.0 ± 0%       ~ (p=1.000 n=10) ¹
+StoreHighWaterJump/jump=half                                       900.0 ± 0%           900.0 ± 0%       ~ (p=1.000 n=10) ¹
+StoreHighWaterJump/jump=window                                    1.800k ± 0%          1.800k ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                            164.3                164.3       +0.00%
+¹ all samples are equal
+
+                           │ benchmarks/countminsketch-phase3-serial.txt │ benchmarks/countminsketch-phase5-serial.txt │
+                           │                  bytes/key                  │        bytes/key         vs base            │
+MemoryFootprint/impl=exact                                    195.0 ± 0%                195.0 ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal
+
+                                         │ benchmarks/countminsketch-phase3-serial.txt │ benchmarks/countminsketch-phase5-serial.txt │
+                                         │               estimate-bytes                │   estimate-bytes    vs base                 │
+MemoryFootprint/impl=sketch/keys=100000                                   187.3Mi ± 0%         187.3Mi ± 0%       ~ (p=1.000 n=10) ¹
+MemoryFootprint/impl=sketch/keys=1000000                                  187.3Mi ± 0%         187.3Mi ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                   187.3Mi              187.3Mi       +0.00%
+¹ all samples are equal
+
+                                         │ benchmarks/countminsketch-phase3-serial.txt │ benchmarks/countminsketch-phase5-serial.txt │
+                                         │                 heap-bytes                  │     heap-bytes      vs base                 │
+MemoryFootprint/impl=sketch/keys=100000                                   187.5Mi ± 0%         187.5Mi ± 0%       ~ (p=1.000 n=10) ¹
+MemoryFootprint/impl=sketch/keys=1000000                                  187.5Mi ± 0%         187.5Mi ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                   187.5Mi              187.5Mi       +0.00%
+¹ all samples are equal

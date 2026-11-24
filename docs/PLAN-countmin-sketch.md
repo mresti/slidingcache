@@ -14,7 +14,7 @@ Código vía Pedro, PRs vía Yago. Cifras medidas en Apple M2, sin locks salvo q
 | ε con shards | global, columnas repartidas entre shards (§3). La RAM casi no depende de `Shards`: +7% con 256 frente a 16, ε por defecto |
 | Contadores | uint32 por slot + uint64 en el agregado, con saturación |
 | Almacenamiento | un array plano por shard, reservado entero en `New` (§3, medido el 2026-11-24) |
-| Actualización | clásica (+1 en todas las filas) en el MVP; conservative update después (Fase 5) |
+| Actualización | clásica (+1 en todas las filas) en el MVP; conservative update por slot desde la Fase 5, siempre activo (decisión del 2026-11-24; no se hace opcional) |
 | Rango de epochs | todo opcional por config: cambiar el rango y desactivar el guard (forma abajo) |
 | Adopción | consumidores con `== 0`/`== 1` siguen en el exacto; gate evaluado con los datos de la librería (§4) |
 | Stats | sin `Keys`; `GetHit` = estimación > 0, `GetMiss` = estimación == 0 |
@@ -36,8 +36,9 @@ Aceptado el 2026-11-24:
 - Ancho mínimo por shard: 8 columnas. Tope de RAM: `Config.MaxMemoryBytes`, 1 GiB por defecto. La
   estimación no se exporta: solo sale en el mensaje de error.
 - Objetivo de rendimiento re-alcanzado: `Store` <= 3× el exacto desde ~110 eventos por bucket en toda la
-  cache; más lento por debajo (§7, Fase 3).
+  cache (~120 desde la Fase 5); más lento por debajo (§7, Fases 3 y 5).
 - `BenchmarkStoreDensity` se queda; `internal/window` no se extrae por ahora; Fase 5 aprobada.
+- Fase 5: conservative update siempre activo; gate de precisión re-alcanzado por densidad; `Ring.Add` a 12,5 ns.
 
 Propuestas mías sin objeción:
 - Sin `SweepInterval` ni janitor: la RAM está acotada por construcción. `Close` queda como no-op por paridad.
@@ -71,7 +72,7 @@ Caducar un bucket: dependencia = `New` = 3,1 µs y 57 KB (2 allocs); prototipo =
 | Expiración | sin `Reset` ni resta: 57 KB nuevos por bucket y shard | resta al agregado y reutiliza, 0 allocs |
 | Decisiones §1 | choca con 4: sin `error` en `New`, sin `AddHash`, sin agregado uint64, sin tamaño por (ancho, filas) | las cumple |
 | Hash | seed pública fija: colisiones fabricables (lo avisa su README) | `maphash` con seed por Cache |
-| Precisión a igual RAM | mejor (~2×, conservative update) | clásico en MVP; CU opcional después (Q3) |
+| Precisión a igual RAM | mejor (~2×, conservative update) | clásico en MVP; conservative update por slot desde la Fase 5, siempre activo |
 | Código a mantener | ~0 | ~200 líneas + tests |
 | Madurez | bien testeada, pero 3 semanas de vida y v0.x | la que le demos; riesgo en el hashing |
 | Dependencias del módulo | rompe "zero external dependencies" | ninguna |
@@ -163,7 +164,7 @@ func (s *Sketch) Reset()
 
 func NewRing(width, depth, slots int) (*Ring, error)            // slots uint32 en un array + agregado uint64
 func (r *Ring) Slots() int
-func (r *Ring) Add(slot int, h uint64) (estimate uint64, saturated bool) // slot+agregado, una pasada
+func (r *Ring) Add(slot int, h uint64) (estimate uint64, saturated bool) // conservative update en el slot, reflejado en el agregado
 func (r *Ring) Count(h uint64) uint64                           // estimación del agregado
 func (r *Ring) Expire(slot int)                                 // agregado -= slot; slot a cero
 func (r *Ring) Reset()
@@ -238,10 +239,11 @@ lecturas de Clock, regla de vida estricta, fuera de orden, rechazo tardío sin e
 | conteo exacto con cualquier `Shards` | con `Shards` > 1 la cota ε/δ vale de media, no por key: cola más gorda junto a una key muy caliente |
 | `Stats.Keys`, `GetHit/GetMiss` por presencia | sin `Keys`; hit/miss por estimación |
 | `HashFunc` solo reparte shards | su calidad afecta a la corrección (colisión 64 bit = keys fusionadas) |
-| count sin tope (spill) | tope 2^32−1 por celda y bucket |
+| count sin tope (spill) | tope 2^32−1 por celda y bucket; `Saturated` cuenta los `Store` cuyo contador mínimo del bucket ya está en el tope |
+| dos `Store` seguidos de una key devuelven conteos consecutivos | pueden devolver el mismo conteo (Fase 5; solo con colisiones) |
 | `Get` no muta | rota slots internamente (no observable) |
 | prune O(1) amortizado | cada cambio de bucket caduca un slot por shard (~340 ns); un salto de HW, uno por bucket saltado |
-| `Store` ~34 ns con cualquier densidad | más rápido que el exacto desde ~450 eventos por bucket; 3× a ~110; 22× con 1 |
+| `Store` ~34 ns con cualquier densidad | más rápido que el exacto desde ~550 eventos por bucket; 3× a ~120; 22× con 1 (Fase 5; antes ~450 y ~110) |
 | cualquier `WindowSize/Precision` | máximo 2^20 buckets por ventana; por encima, error de `New` |
 
 Se mantiene en single-thread: `Store(k)` == `Get` previo + 1, si ese `Store` no avanza el HW ni satura una celda.
@@ -364,9 +366,80 @@ anterior al paso 4, mediana de 5):
   #17 y #18: sin conflictos en `README.md`, `benchmarks/README.md` ni `slidingcache.go`.
 - No hecho: `internal/window` (opcional; es un refactor de raíz con gate del 3%). Descartado por ahora
   (decisión del 2026-11-24); la deuda 5 sigue abierta.
-**Fase 5 — conservative update (después del MVP).** Solo sube las celdas por debajo del nuevo mínimo del
-slot y refleja el mismo delta en el agregado (I1 se mantiene). Gate: nunca subestima, error medio <= 0,6× el
-clásico en uniforme y Zipf, modo A sigue exacto. Coste asumido: `Store` deja de subir siempre +1.
+**Fase 5 — conservative update. HECHA (2026-11-24, rama `feat/countmin-phase-5-conservative-update`), con
+el gate de precisión re-alcanzado y aceptado: el original no se cumple tal como estaba escrito.** Alcance
+original: solo sube las celdas por debajo del nuevo mínimo del slot y refleja el mismo delta en el agregado
+(I1 se mantiene). Gate: nunca subestima, error medio <= 0,6× el clásico en uniforme y Zipf, modo A sigue
+exacto. Coste asumido: `Store` deja de subir siempre +1.
+
+Diseño:
+- `Ring.Add`: m = la menor de las celdas de la key en su **slot**; suben en 1, en el slot y en el agregado,
+  solo las filas cuya celda vale m. Sin API nueva. `Sketch` sigue clásico: es la referencia de los tests.
+- El mínimo sale del slot, no del agregado. Con el agregado, una fila que otros slots ya habían subido no se
+  toca; al caducar esos slots la key queda por debajo de su conteo real (hay test determinista).
+- Nunca subestima: el agregado es un mínimo de sumas, >= la suma de los mínimos por slot, >= el conteo. Ninguna
+  celda supera la del clásico, así que la cota (ε, δ) no cambia.
+- Saturación: solo cuando ese mínimo ya vale 2^32−1 (antes, cualquier fila saturada).
+- Efecto visible: dos `Store` seguidos de una key pueden devolver el mismo conteo (solo con colisiones).
+
+Precisión, simulada fuera del repo (100K keys, 2719×5, 600 buckets): error medio con conservative update /
+con el clásico. Carga = eventos por bucket / ancho.
+
+| Eventos por bucket (carga) | Uniforme | Zipf 1,1, por key | Zipf 1,1, ponderado por eventos | `Store` que no sube (uniforme / Zipf) |
+|---|---|---|---|---|
+| 10 (0,004) | 1,00 | 0,99 | — | 0% / 0% |
+| 100 (0,04) | 0,98 | 0,99 | 0,52-0,57 | 1% / 0% |
+| 1000 (0,37) | 0,86 | 0,96 | 0,36-0,41 | 13% / 1% |
+| 10.000 (3,7) | 0,55 | 0,77 | 0,19-0,22 | 41% / 6% |
+| 100.000 (37) | 0,48 | 0,59-0,60 | 0,12-0,13 | 44% / 6% |
+
+- Con 1 y con 16 shards sale lo mismo. Una semilla por fila.
+- Workload de §4 (3 semillas, sobreconteo mediano): ε=1e-3, +300.000 -> +141.000 (0,47×); ε=1e-4, +19.300 ->
+  +6.500 (0,34×, de 1,9× a 0,65× el valor real). La conclusión de §4 no cambia.
+- **Gate de precisión:** <= 0,6× solo se cumple en uniforme desde ~10.000 eventos por bucket (carga >= 3,7).
+  En Zipf por key llega a 0,59-0,60 con 100.000. Con <= 1000 eventos por bucket la mejora es <= 14%.
+  Re-alcance aceptado el 2026-11-24: nunca por encima del clásico, celda a celda; <= 0,65× en uniforme y
+  <= 0,8× en Zipf por key con carga >= 3,7 (~10.000 eventos por bucket con ε por defecto).
+- En el repo: anillo de 64×4, 8 slots, 4000 keys, 5 semillas. Uniforme 0,55-0,57 (carga 3,7) y 0,51 (carga
+  37); Zipf 0,62-0,65 (carga 3,7). Umbrales de los tests: 0,65 y 0,8.
+
+Coste (M2, A/B intercalado en dos rondas, 20 muestras por lado, brazo sketch; exacto del archivo):
+
+| Benchmark | antes | conservative update | exacto |
+|---|---|---|---|
+| `RingAdd` 2719×5 | 9,6 ns | 12,5 ns | — |
+| `StoreDense` | 34,7 ns | 40,6 ns | 62,1 ns |
+| `StoreMediumCardinalitySameBucket` (10K keys) | 25,3 ns | 31,5 ns | 27,4 ns |
+| `StoreHotKeyNanos` | 20,9 ns | 24,9 ns | 17,6 ns |
+| `StoreDensity`, 100 eventos por bucket | 119,9 ns | 123,1 ns | 36,3 ns |
+| `StoreDensity`, 1000 | 35,1 ns | 40,4 ns | 58,3 ns |
+| `StoreManyKeys` | 743 ns | 750 ns | 33,6 ns |
+| `ParallelStoreDense` (4 CPU) | 22,9 ns | 23,7 ns | 21,7 ns |
+
+- `Ring.Add` queda por encima del límite de 12 ns de la Fase 1, que se fijó para el clásico; aceptado el
+  2026-11-24. `Count`, `Expire` y `Get` no cambian. 0 allocs.
+- `Store` sube 4-6 ns donde manda la actualización de contadores (+17% a +24%) y ~1% donde manda la caducidad.
+- El objetivo de 3× pasa de ~110 a ~120 eventos por bucket; la igualdad con el exacto, de ~450 a ~550.
+- Idea no probada para bajar de 12 ns: camino recto para profundidad 5, sin bucle ni array de índices.
+
+Verificación:
+- `make ci` verde en go1.26.4 y go1.27.3 (cobertura 100% raíz, 98,6% y 98,4%); vet linux/386 de los paquetes
+  nuevos; `-race -count=5`. Raíz sin tocar.
+- Fuzz 30 s por target, 0 fallos: 10,1M y 3,5M ejecuciones en `internal/countmin`; 257K, 194K, 48,6K y 36,2K
+  en `countminsketch`. `FuzzRingWindow` comprueba propiedades (>= conteo exacto tras caducar, cada celda <=
+  la del clásico, I1), no un modelo espejo. El modo de colisiones corre ahora con profundidad 1, 2 o 3 y su
+  cota superior es la estimación del clásico.
+- Mutantes a mano: 19 míos y 15 de Pedro sobre `Ring.Add`, todos cazados. Huecos encontrados y cerrados: el
+  fuzz de colisiones solo usaba profundidad 1, donde las dos actualizaciones coinciden (con la semilla nueva
+  caza «mínimo del agregado» en 500 de 500 ejecuciones); «el mínimo ignora la última fila» solo caía a nivel
+  de cache (test nuevo a nivel de anillo).
+- CI de Linux en verde en la PR #23.
+- Archivado con `make test-bench-save PR=countminsketch-phase5 PKG=./countminsketch
+  BASELINE=benchmarks/countminsketch-phase3` (primera ejecución real del target con `PKG`; benchstat incluido),
+  sobre el commit 1f42463. Coincide con el A/B: `StoreDense` 35,6 -> 40,2 ns, `StoreHotKeyNanos` 20,8 -> 24,9,
+  `StoreMediumCardinalitySameBucket` 25,5 -> 31,2; densidad 100: 123 ns (3,4× el exacto). RAM igual:
+  196.591.872 B. El README cita ya las cifras del archivo.
+- Sin verificar: tests en 32 bit; rama `Stats.Saturated++`.
 
 Verificación local en todas las fases: `go vet`, tests con `-race` y lint (golangci-lint v2.15.0), todo en
 go1.26.4 y go1.27.3.
@@ -413,7 +486,7 @@ go1.26.4 y go1.27.3.
   y 559 µs por una ventana entera de 1800 slots (16 shards, ε por defecto), una vez por shard. Con
   `Shards: 1` el mismo salto recorre el anillo entero bajo el único lock.
 - Tráfico disperso: con pocos eventos por bucket el coste de caducar domina (22× el exacto con 1 evento
-  por bucket, 3× con ~110, igual con ~450; ε por defecto). El umbral crece como 1/ε.
+  por bucket, 3× con ~120, igual con ~550; ε por defecto, tras la Fase 5). El umbral crece como 1/ε.
 - Primer `expireTo` de una cache virgen: la distancia al centinela desborda si se resta sin saturar.
 - Saturación de celda (Precision grande + key muy caliente): el conteo se queda corto; contarlo en Stats.
 - Cambiar ε/δ exige cache nueva. `New` reserva toda la ventana; después no se aloca nada.

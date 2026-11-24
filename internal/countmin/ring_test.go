@@ -139,31 +139,62 @@ func TestRingSingleKeyGrowsByOnePerAdd(t *testing.T) {
 	}
 }
 
-func TestRingAddStopsAtASaturatedSlotCell(t *testing.T) {
-	const width, depth = 16, 3
-	r := mustRing(t, width, depth, 2)
-	h := splitmix64(99)
-	r.Add(1, h)
-	saturatedCell := cellIndexes(h, width, depth)[0]
-	*slotCell(r, 0, saturatedCell) = math.MaxUint32
-	r.agg[saturatedCell] += math.MaxUint32
-	before := slices.Clone(r.agg)
+// TestRingAddSaturatesOnlyAtTheSlotMinimum plants h's cells in one slot, over
+// another slot that adds 7 to each aggregate cell, and checks that saturation
+// is decided by the smallest of h's slot cells alone.
+func TestRingAddSaturatesOnlyAtTheSlotMinimum(t *testing.T) {
+	const width, depth, slot, below = 16, 3, 1, 7
+	const top = math.MaxUint32
+	tests := []struct {
+		name          string
+		planted, want [depth]uint32
+		saturated     bool
+	}{
+		{
+			name:    "minimum one below the top is raised",
+			planted: [depth]uint32{top - 1, top - 1, top},
+			want:    [depth]uint32{top, top, top},
+		},
+		{
+			name:      "minimum at the top moves nothing",
+			planted:   [depth]uint32{top, top, top},
+			want:      [depth]uint32{top, top, top},
+			saturated: true,
+		},
+		{
+			name:    "a row at the top above a lower minimum",
+			planted: [depth]uint32{top, 5, 6},
+			want:    [depth]uint32{top, 6, 6},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := mustRing(t, width, depth, 2)
+			h := splitmix64(99)
+			rows := cellIndexes(h, width, depth)
+			for i, j := range rows {
+				plantSlotCell(r, 0, j, below)
+				plantSlotCell(r, slot, j, tt.planted[i])
+			}
 
-	_, saturated := r.Add(0, h)
+			estimate, saturated := r.Add(slot, h)
 
-	if !saturated {
-		t.Fatal("Add into a saturated slot cell did not report saturation")
+			if saturated != tt.saturated {
+				t.Fatalf("saturated = %t, want %t", saturated, tt.saturated)
+			}
+			wantEstimate := uint64(math.MaxUint64)
+			for i, j := range rows {
+				if got := *slotCell(r, slot, j); got != tt.want[i] {
+					t.Fatalf("row %d slot cell = %d, want %d", i, got, tt.want[i])
+				}
+				wantEstimate = min(wantEstimate, uint64(tt.want[i])+below)
+			}
+			if estimate != wantEstimate || r.Count(h) != wantEstimate {
+				t.Fatalf("estimate = %d, Count = %d, want %d", estimate, r.Count(h), wantEstimate)
+			}
+			assertAggregateIsSumOfSlots(t, r)
+		})
 	}
-	if *slotCell(r, 0, saturatedCell) != math.MaxUint32 || r.agg[saturatedCell] != before[saturatedCell] {
-		t.Fatalf("saturated row moved: slot %d, aggregate %d -> %d",
-			*slotCell(r, 0, saturatedCell), before[saturatedCell], r.agg[saturatedCell])
-	}
-	for _, j := range cellIndexes(h, width, depth)[1:] {
-		if r.agg[j] != before[j]+1 {
-			t.Fatalf("unsaturated row cell %d = %d, want %d", j, r.agg[j], before[j]+1)
-		}
-	}
-	assertAggregateIsSumOfSlots(t, r)
 }
 
 // TestRingAddRaisesTheLastCountBeforeSaturation pins the boundary of
