@@ -11,7 +11,14 @@ TESTFLAGS ?= -race -cover
 
 GOBIN ?= $(shell go env GOPATH)/bin
 
+# PKG is the package the bench and fuzz targets run: make test-bench PKG=./countminsketch.
+# go test -fuzz takes exactly one package, so for the fuzz targets PKG must be a
+# single package, never ./...
+PKG ?= .
+
 # Fuzz knobs: FUZZTIME per target, FUZZ picks one target for test-fuzz-one/long.
+# The default FUZZ is a root target: another PKG needs its own FUZZ
+# (make test-fuzz-one PKG=./internal/countmin FUZZ=FuzzRingWindow).
 FUZZTIME ?= 10s
 FUZZ ?= FuzzStoreGetInvariants
 
@@ -49,20 +56,22 @@ BENCHFLAGS ?=
 
 .PHONY: test-bench
 test-bench: ## Runs benchmarks: serial ones at -cpu=1, parallel ones at -cpu=1,4,8
-	go test -run '^$$' -bench=. -benchmem -cpu=1 $(BENCHFLAGS)
-	go test -run '^$$' -bench '^BenchmarkParallel' -benchmem -cpu=1,4,8 $(BENCHFLAGS)
+	go test -run '^$$' -bench=. -benchmem -cpu=1 $(BENCHFLAGS) $(PKG)
+	go test -run '^$$' -bench '^BenchmarkParallel' -benchmem -cpu=1,4,8 $(BENCHFLAGS) $(PKG)
 
 .PHONY: test-bench-stat
 test-bench-stat: ## benchstat summary: serial benches at -cpu=1, parallel ones at -cpu=4, both -count=10 (no go.mod pollution)
 	@serial=$$(mktemp); parallel=$$(mktemp); \
-	go test -run '^$$' -bench '^Benchmark(Store|Get|Sweep|Memory)' -benchmem -count=10 -cpu=1 $(BENCHFLAGS) | tee $$serial; \
-	go test -run '^$$' -bench '^BenchmarkParallel' -benchmem -count=10 -cpu=4 $(BENCHFLAGS) | tee $$parallel; \
+	go test -run '^$$' -bench '^Benchmark(Store|Get|Sweep|Memory)' -benchmem -count=10 -cpu=1 $(BENCHFLAGS) $(PKG) | tee $$serial; \
+	go test -run '^$$' -bench '^BenchmarkParallel' -benchmem -count=10 -cpu=4 $(BENCHFLAGS) $(PKG) | tee $$parallel; \
 	go run golang.org/x/perf/cmd/benchstat@latest $$serial; \
 	go run golang.org/x/perf/cmd/benchstat@latest $$parallel; \
 	rm -f $$serial $$parallel
 
 # Benchmark archive: post-change results plus the benchstat comparison against
-# the committed baseline, one pair of files per PR.
+# the committed baseline, one pair of files per PR. BASELINE must be an archive
+# of the same PKG: make test-bench-save PR=<name> PKG=./countminsketch
+# BASELINE=benchmarks/countminsketch-phase3
 BENCHDIR ?= benchmarks
 BASELINE ?= $(BENCHDIR)/baseline-v1.2.0
 BENCHSTAT ?= go run golang.org/x/perf/cmd/benchstat@latest
@@ -77,9 +86,9 @@ test-bench-save: ## Saves post benches + benchstat vs baseline: make test-bench-
 		"$$(go env GOVERSION)" "$$cpu" "$$cores" "$$commit" "$$(date -u +%Y-%m-%dT%H:%MZ)" \
 		> $(BENCHDIR)/$(PR)-serial.txt; \
 	printf '# parallel -cpu=4 | commit %s\n' "$$commit" > $(BENCHDIR)/$(PR)-parallel.txt
-	go test -run '^$$' -bench '^Benchmark(Store|Get|Sweep|Memory)' -benchmem -count=10 -cpu=1 $(BENCHFLAGS) \
+	go test -run '^$$' -bench '^Benchmark(Store|Get|Sweep|Memory)' -benchmem -count=10 -cpu=1 $(BENCHFLAGS) $(PKG) \
 		>> $(BENCHDIR)/$(PR)-serial.txt
-	go test -run '^$$' -bench '^BenchmarkParallel' -benchmem -count=10 -cpu=4 $(BENCHFLAGS) \
+	go test -run '^$$' -bench '^BenchmarkParallel' -benchmem -count=10 -cpu=4 $(BENCHFLAGS) $(PKG) \
 		>> $(BENCHDIR)/$(PR)-parallel.txt
 	$(BENCHSTAT) $(BASELINE)-serial.txt $(BENCHDIR)/$(PR)-serial.txt \
 		> $(BENCHDIR)/$(PR)-vs-baseline-serial.txt
@@ -89,17 +98,17 @@ test-bench-save: ## Saves post benches + benchstat vs baseline: make test-bench-
 
 .PHONY: test-fuzz
 test-fuzz: ## Replays Fuzz* seed + saved corpus only (fast, deterministic, safe for CI)
-	go test -run '^Fuzz' -v .
+	go test -run '^Fuzz' -v $(PKG)
 
 .PHONY: test-fuzz-one
-test-fuzz-one: ## Actually fuzzes one target for FUZZTIME (make test-fuzz-one FUZZ=FuzzStoreGetInvariants FUZZTIME=1m)
-	go test -run '^$$' -fuzz "^$(FUZZ)$$" -fuzztime $(FUZZTIME) .
+test-fuzz-one: ## Actually fuzzes one target for FUZZTIME (make test-fuzz-one FUZZ=FuzzStoreGetInvariants FUZZTIME=1m); another PKG needs its own FUZZ
+	go test -run '^$$' -fuzz "^$(FUZZ)$$" -fuzztime $(FUZZTIME) $(PKG)
 
 .PHONY: test-fuzz-all
 test-fuzz-all: ## Fuzzes every Fuzz* target for FUZZTIME each, one after another (make test-fuzz-all FUZZTIME=1m)
-	@for f in $$(go test -list '^Fuzz' . | grep '^Fuzz'); do \
+	@for f in $$(go test -list '^Fuzz' $(PKG) | grep '^Fuzz'); do \
 		echo "==> $$f ($(FUZZTIME))"; \
-		go test -run '^$$' -fuzz "^$$f$$" -fuzztime $(FUZZTIME) . || exit 1; \
+		go test -run '^$$' -fuzz "^$$f$$" -fuzztime $(FUZZTIME) $(PKG) || exit 1; \
 	done
 
 .PHONY: build

@@ -388,9 +388,14 @@ const eventsPerDenseBucket = 1_000
 // starts with every slot live and expires as many as it opens, whatever b.N.
 // It returns the op index the timed loop continues from.
 func prewarmDense(c slidingcache.SlidingCache, keySet []string, buckets int) int {
-	ops := buckets * eventsPerDenseBucket
+	return prewarmAtDensity(c, keySet, buckets*eventsPerDenseBucket, eventsPerDenseBucket)
+}
+
+// prewarmAtDensity runs ops Stores of the round-robin workload at events per
+// bucket and returns the op index the timed loop continues from.
+func prewarmAtDensity(c slidingcache.SlidingCache, keySet []string, ops, events int) int {
 	for i := range ops {
-		c.Store(int64(i/eventsPerDenseBucket), keySet[i%len(keySet)])
+		c.Store(int64(i/events), keySet[i%len(keySet)])
 	}
 	runtime.GC()
 	return ops
@@ -410,6 +415,40 @@ func BenchmarkStoreDense(b *testing.B) {
 			c.Store(int64(i/eventsPerDenseBucket), keySet[i%keys])
 		}
 	})
+}
+
+// maxDensityWarmup caps the warm-up of BenchmarkStoreDensity, so the densest
+// arm does not spend tens of millions of untimed Stores filling the window.
+const maxDensityWarmup = 4_000_000
+
+// BenchmarkStoreDensity is BenchmarkStoreDense swept over the events per
+// one-second bucket. It prices the sketch's expiry, one slot per shard per new
+// bucket, spread over the events of that bucket, against the exact cache at
+// the same density: the reproducer of the density at which the sketch catches
+// up. events=1000 is the same workload as BenchmarkStoreDense, kept separately
+// because that one is in the archived files.
+//
+// The warm-up fills the whole window, so the timed loop expires as many slots
+// as it opens, up to 1000 events per bucket. At 10000 it stops at
+// maxDensityWarmup events, 400 of the 3600 buckets, so nothing expires in the
+// timed part there unless b.N reaches past the rest of the window.
+func BenchmarkStoreDensity(b *testing.B) {
+	const keys = 100_000
+	keySet := makeKeys(keys)
+	cfg := benchConfig()
+	for _, events := range []int{1, 10, 30, 100, 300, 1_000, 10_000} {
+		b.Run(fmt.Sprintf("events=%d", events), func(b *testing.B) {
+			forEachImpl(b, cfg, func(b *testing.B, c slidingcache.SlidingCache) {
+				warmup := min(bucketsOf(cfg)*events, maxDensityWarmup)
+				start := prewarmAtDensity(c, keySet, warmup, events)
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := start; i < start+b.N; i++ {
+					c.Store(int64(i/events), keySet[i%keys])
+				}
+			})
+		})
+	}
 }
 
 // BenchmarkParallelStoreDense is BenchmarkParallelStore at a thousand events

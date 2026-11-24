@@ -97,30 +97,40 @@ import (
 
 // SlidingCache records events per key and reports live counts within a sliding
 // window. See the package documentation for the exact window semantics.
+//
+// Two implementations exist. Cache, in this package, counts exactly. The Cache
+// of the countminsketch subpackage keeps the same window semantics and
+// sentinels in fixed memory and returns estimates: never below the exact count,
+// sometimes above it. Code written against the interface that must work with
+// both treats a non-negative result as an upper bound, comparing it with >=
+// against a threshold and never with == 0 or == 1.
 type SlidingCache interface {
-	// Store records an event for keyInHash at the window containing epoch.
-	// If the key already has live events, increments and returns the new count.
-	// Otherwise stores 1 and returns 1.
+	// Store records an event for keyInHash at the window containing epoch and
+	// returns the key's live count, that event included. An exact
+	// implementation returns 1 for a key with no other live event; an
+	// approximate one may return more.
 	//
 	// If the event is already expired relative to the high-water mark
 	// (t <= HW - WindowSize after conversion and truncation), it is not stored
 	// and Store returns -1 to signal "late event, not stored". Store also
 	// returns -1, without advancing the high-water mark, for an epoch whose
-	// bucket timestamp falls outside the range a bucket word represents:
-	// +-2^(63-CountBits) seconds, +-2^43 seconds with the default CountBits.
+	// bucket timestamp falls outside the range the implementation accepts: for
+	// Cache, +-2^(63-CountBits) seconds, +-2^43 seconds with the default
+	// CountBits.
 	//
-	// On a Cache configured with Config.MaxFutureSkew, an event further than
-	// that skew ahead of Config.Clock is rejected with -2, again without
+	// On an implementation configured with a MaxFutureSkew, an event further
+	// than that skew ahead of its Clock is rejected with -2, again without
 	// advancing the high-water mark.
 	Store(epoch int64, keyInHash string) int
 	// Get returns the live count for keyInHash within the sliding window
-	// covering epoch. Returns 0 if the key does not exist.
+	// covering epoch. An exact implementation returns 0 for a key with no live
+	// event; an approximate one may return more.
 	//
 	// If epoch itself falls outside the live window (t <= HW - WindowSize after
-	// conversion and truncation), or its bucket timestamp falls outside
-	// +-2^(63-CountBits) seconds, Get returns -1 to signal "queried epoch is
-	// outside the live window". An epoch further than Config.MaxFutureSkew
-	// ahead of Config.Clock yields -2.
+	// conversion and truncation), or its bucket timestamp falls outside the
+	// range the implementation accepts, Get returns -1 to signal "queried epoch
+	// is outside the live window". An epoch further than the configured
+	// MaxFutureSkew ahead of the Clock yields -2.
 	Get(epoch int64, keyInHash string) int
 }
 

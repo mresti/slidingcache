@@ -98,7 +98,7 @@ Gates: 0 allocs/op on every `impl=sketch` row of Store and Get, and in
 with the number of keys.
 
 Medians of the 10 runs, ns/op (default Epsilon and Delta, 2719x5 over 16 shards;
-1 h window at 1 s):
+1 h window at 1 s, except `StoreHotKeyNanos`, which uses a 5 min window):
 
 | Benchmark | exact | sketch |
 |---|---|---|
@@ -132,6 +132,41 @@ Medians of the 10 runs, ns/op (default Epsilon and Delta, 2719x5 over 16 shards;
   `New`'s; no other sketch row allocates.
 - `ParallelGet/impl=exact` is bimodal in this file (13 to 18 ns).
 
-A first pair of runs was discarded: the machine was in interactive use and the
-`-cpu=4` rows of the exact arm read up to twice these figures. The archived runs
-were taken after that load was gone. Same machine as the baseline, go1.27.3.
+Three earlier runs were discarded, one serial and two parallel: the machine was
+in interactive use and the `-cpu=4` rows of the exact arm read up to twice these
+figures. The archived runs were taken after that load was gone. Same machine as the baseline, go1.27.3.
+
+The next archive of the package comes from the Makefile, pointed at it with
+`PKG` and compared against this one with `BASELINE`:
+```
+make test-bench-save PR=<name> PKG=./countminsketch BASELINE=benchmarks/countminsketch-phase3
+```
+It runs the same two commands under the same two header lines and writes
+`<name>-{serial,parallel}.txt` plus `<name>-vs-baseline-{serial,parallel}.txt`.
+Here the baseline is the previous archive of the package, not the exact arm:
+`BASELINE` must name an archive of the same `PKG`, and the default,
+`baseline-v1.2.0`, is one of the root package.
+
+`countminsketch-phase4-density.txt` holds `BenchmarkStoreDensity` alone
+(-count=10 -cpu=1), the workload of `StoreDense` swept over the events per
+one-second bucket, all keys together. It is the reproducer of the performance
+target: the first event a shard sees in a new bucket expires a slot, and that
+cost is spread over the events of the bucket.
+```
+go test -run '^$' -bench '^BenchmarkStoreDensity' -benchmem -count=10 -cpu=1 ./countminsketch
+```
+Medians, ns/op:
+
+| Events per bucket | exact | sketch | sketch / exact |
+|---|---|---|---|
+| 1 | 33.8 | 757 | 22.4 |
+| 10 | 33.8 | 466 | 13.8 |
+| 30 | 36.4 | 277 | 7.6 |
+| 100 | 36.3 | 121 | 3.3 |
+| 300 | 43.2 | 56.2 | 1.3 |
+| 1,000 | 58.3 | 34.6 | 0.59 |
+| 10,000 | 70.0 | 26.5 | 0.38 |
+
+The sketch is within 3x of the exact cache from about 110 events per bucket and
+faster from about 450; 0 allocs/op on both arms. The benchmark is also part of
+the serial archive from now on, since its name starts with `BenchmarkStore`.
