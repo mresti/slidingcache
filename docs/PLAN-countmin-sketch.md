@@ -1,7 +1,7 @@
 # Plan: SlidingCache probabilística sobre Count-Min Sketch (paquete nuevo)
 
 Base: `main` == 26e668c (tags v1.4.0 y v1.5.0, mismo commit). Tests verdes en go1.27.3; `go.mod` se queda en `go 1.26`.
-Paquete raíz **intacto** en Fases 1-3 (su gate 3% se cumple por construcción). Sin commits sin confirmación.
+Paquete raíz **intacto** en Fases 1-3 (su gate 3% se cumple por construcción); en la Fase 4, solo comentarios. Sin commits sin confirmación.
 Código vía Pedro, PRs vía Yago. Cifras medidas en Apple M2, sin locks salvo que se diga.
 
 ## 1. Decisiones cerradas (2026-11-23)
@@ -311,7 +311,8 @@ Pasos, cada uno con su gate:
    pasos); 21 mutantes a mano, 20 cazados, el otro solo cambia velocidad. Los 3 huecos del paso 1 cerrados.
 
 Resultados (M2, go1.27.3, mediana de 10, del archivo de `benchmarks/`; ε y shards por defecto: 2719×5 entre
-16 shards, 1 h a 1 s; la última columna es de la ejecución anterior al paso 4, mediana de 5):
+16 shards, 1 h a 1 s, salvo `StoreHotKeyNanos`, con ventana de 5 min; la última columna es de la ejecución
+anterior al paso 4, mediana de 5):
 
 | Benchmark | exacto | sketch | sketch antes del paso 4 |
 |---|---|---|---|
@@ -340,8 +341,27 @@ Resultados (M2, go1.27.3, mediana de 10, del archivo de `benchmarks/`; ε y shar
 - 0 allocs por operación en todas las filas del sketch.
 - No se implementa la reconstrucción desde supervivientes (ahorro máximo 2× en un salto de HW, que es raro).
 - Sin verificar: tests en 32 bit (solo vet de los paquetes nuevos); `Stats.Saturated` sigue sin cubrir.
-**Fase 4 — docs y deuda.** README (sección sketch, sizing, tabla §6), contrato de la interface, Makefile
-(`PKG`), y opcional extraer `internal/window` (toca raíz -> gate 3%).
+**Fase 4 — docs y deuda. HECHA (2026-11-24, rama `feat/countmin-phase-4-docs`).** Alcance original: README
+(sección sketch, sizing, tabla §6), contrato de la interface, Makefile (`PKG`), y opcional extraer
+`internal/window` (toca raíz -> gate 3%). Resultado:
+- Raíz: solo comentarios en `slidingcache.go` (doc de `SlidingCache`: implementación exacta y aproximada,
+  comparar con `>=`), README y Makefile. El diff de `.go` de raíz son solo líneas `//`: el gate del 3% no aplica.
+- README: sección `countminsketch` (cuándo usarlo y cuándo no, qué se mantiene, tabla de qué cambia, sizing,
+  configuración, coste), viñeta en la intro, bloque «Public interface» y las tres correcciones de la deuda 7.
+  Tabla de RAM comprobada celda a celda contra `layout()` / `memoryBytes()`; cifras de coste, del archivo de
+  la Fase 3.
+- `ExampleNew` compila el snippet del README (sin `// Output:`: lee el reloj).
+- Makefile `PKG ?= .` en `test-bench`, `test-bench-stat`, `test-bench-save`, `test-fuzz`, `test-fuzz-one` y
+  `test-fuzz-all`. Con el valor por defecto, `make -n` solo cambia en el `.` explícito de los tres de bench.
+  Ejecutados con `PKG`: `test-fuzz`, `test-fuzz-one`, `test-fuzz-all` y `test-bench`. `test-bench-save` y
+  `test-bench-stat` con `PKG`, solo `make -n`. `-fuzz` admite un único paquete.
+- `BenchmarkStoreDensity`: el barrido de densidad de la Fase 3 pasa a ser un benchmark del repo. Mediana de
+  10, exacto / sketch en ns: 1 evento por bucket 34 / 745; 10: 34 / 462; 30: 36 / 275; 100: 37 / 120; 300:
+  43 / 57; 1000: 59 / 35; 10.000: 69 / 27. Mismo resultado que el barrido a mano: 3× a ~110 eventos por
+  bucket, igualdad a ~450. **Pendiente:** archivarlo en `benchmarks/` tras el commit.
+- `make ci` verde en go1.26.4 y go1.27.3 (cobertura 100% raíz, 98,6% y 98,2%). Fusión simulada con las PR
+  #17 y #18: sin conflictos en `README.md`, `benchmarks/README.md` ni `slidingcache.go`.
+- No hecho: `internal/window` (opcional; es un refactor de raíz con gate del 3%), a decidir.
 **Fase 5 — conservative update (después del MVP).** Solo sube las celdas por debajo del nuevo mínimo del
 slot y refleja el mismo delta en el agregado (I1 se mantiene). Gate: nunca subestima, error medio <= 0,6× el
 clásico en uniforme y Zipf, modo A sigue exacto. Coste asumido: `Store` deja de subir siempre +1.
@@ -402,13 +422,14 @@ go1.26.4 y go1.27.3.
 
 1. `go.mod` en `go 1.26` mientras los benchmarks archivados dicen go1.27.0 (se queda así por decisión).
 2. Tags v1.4.0 y v1.5.0 en el mismo commit; sin baseline v1.4/v1.5; `BASELINE` del Makefile sigue en v1.2.0.
-3. Makefile: `test-bench*` y `test-fuzz*` solo corren el paquete raíz (`.`). Se arregla en Fase 4.
-4. Doc de `SlidingCache` promete exactitud ("stores 1 and returns 1", "Returns 0 if the key does not exist").
-   Se relaja en Fase 4.
+3. **Resuelta (Fase 4).** Makefile: `test-bench*` y `test-fuzz*` solo corrían el paquete raíz (`.`); ahora
+   aceptan `PKG` (un solo paquete en los de fuzz).
+4. **Resuelta (Fase 4).** La doc de `SlidingCache` prometía exactitud ("stores 1 and returns 1", "Returns 0
+   if the key does not exist"); ahora distingue implementación exacta y aproximada.
 5. Lógica de ventana no exportada en raíz -> duplicada hasta extraer `internal/window`.
 6. Guard de rango (±2^(63−CountBits)) es regla de dominio colgada de un detalle de almacenamiento.
-7. README obsoleto: "Future/GetFuture stay at 0 until MaxFutureSkew... land" (ya está); el export de ejemplo
-   omite `GetFuture`; `HighWater` dice "ever accepted" y el código "ever advanced".
+7. **Resuelta (Fase 4).** README obsoleto: "Future/GetFuture stay at 0 until MaxFutureSkew... land" (ya
+   está); el export de ejemplo omitía `GetFuture`; `HighWater` decía "ever accepted" y el código "ever advanced".
 8. `slidingcache.go:350`: el comentario de `layout` quedó encima de `maxFutureSkew`.
 9. `SlidingCache` no incluye `Close/HighWater/Stats`: tras la interface se pierde ciclo de vida y diagnóstico.
 10. FNV-1a por defecto: predecible y ~7× más lento que `maphash` en keys de 58 B. En raíz solo sesga shards.
@@ -424,4 +445,7 @@ go1.26.4 y go1.27.3.
 
 ## 11. Preguntas abiertas
 
-Ninguna. Pendiente de dato externo: el umbral real del consumidor, que la librería no recoge (§4).
+1. ¿Extraer `internal/window` (deuda 5)? Refactor de raíz, gate 3%.
+2. ¿Fase 5 (conservative update)?
+
+Pendiente de dato externo: el umbral real del consumidor, que la librería no recoge (§4).

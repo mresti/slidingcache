@@ -38,3 +38,27 @@ func ExampleCache() {
 	// a minute later: 0
 	// an epoch behind the window: true
 }
+
+// Kept in step with the README's usage snippet. It reads the wall clock, so it
+// has no Output comment: go test compiles it without running it.
+
+// A rate limiter fed with the wall clock. An estimate is never below the exact
+// count, so comparing it with >= trips at the same event as the exact cache
+// would, or earlier.
+func ExampleNew() {
+	c, err := countminsketch.New(countminsketch.Config{
+		Precision:  time.Second,
+		WindowSize: time.Minute,
+		EpochUnit:  slidingcache.EpochInSeconds,
+	})
+	if err != nil {
+		panic(err)
+	}
+	defer c.Close()
+
+	const limit = 100
+	if c.Store(time.Now().Unix(), "client-42") >= limit {
+		// Trips at the same event as the exact cache, or earlier.
+		fmt.Println("over the limit")
+	}
+}

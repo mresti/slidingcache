@@ -11,6 +11,9 @@ footprint even under heavy churn of short-lived keys.
 - Lock-sharded for concurrent access; safe under `-race`.
 - Lazy pruning on `Store` plus a background janitor that returns memory to the
   garbage collector; `Get` is read-only and never mutates the cache.
+- An approximate, fixed-memory implementation of the same interface lives in
+  the `countminsketch` subpackage; see
+  [Approximate counting with `countminsketch`](#approximate-counting-with-countminsketch).
 
 ## Install
 
@@ -59,19 +62,29 @@ func main() {
 ```go
 type SlidingCache interface {
 	// Store records an event for keyInHash at the window containing epoch and
-	// returns the resulting live count. Returns -1 if the event is late (its
-	// timestamp is outside the live window) and was not stored, or if its
-	// bucket timestamp is outside ±2^(63−CountBits) seconds; -2 if it lies
-	// further than MaxFutureSkew ahead of Clock().
+	// returns the key's live count, that event included: 1 for a key with no
+	// other live event on an exact implementation, possibly more on an
+	// approximate one. Returns -1 if the event is late (its timestamp is outside
+	// the live window) and was not stored, or if its bucket timestamp is
+	// outside the range the implementation accepts (±2^(63−CountBits) seconds
+	// for Cache); -2 if it lies further than MaxFutureSkew ahead of Clock().
 	Store(epoch int64, keyInHash string) int
 	// Get returns the live count for keyInHash within the sliding window
-	// covering epoch, or 0 if the key does not exist. Returns -1 if epoch itself
-	// is outside the live window, or its bucket timestamp is outside
-	// ±2^(63−CountBits) seconds; -2 if it lies further than MaxFutureSkew ahead
-	// of Clock().
+	// covering epoch: 0 for a key with no live event on an exact
+	// implementation, possibly more on an approximate one. Returns -1 if epoch
+	// itself is outside the live window, or its bucket timestamp is outside the
+	// range the implementation accepts; -2 if it lies further than
+	// MaxFutureSkew ahead of Clock().
 	Get(epoch int64, keyInHash string) int
 }
 ```
+
+Two implementations exist: `slidingcache.Cache`, in this package, counts
+exactly; `countminsketch.Cache` returns estimates in fixed memory, never below
+the exact count and sometimes above it. Code that must work with both compares
+a non-negative result with `>=` against a threshold, never with `== 0` or
+`== 1`; see
+[Approximate counting with `countminsketch`](#approximate-counting-with-countminsketch).
 
 Both methods return the sentinel `-1` (`slidingcache.LateEvent`) when the
 (converted, truncated) timestamp falls outside the live window, or outside the
@@ -274,8 +287,10 @@ whose high-water mark has advanced past `WindowSize` returns `-1`.
 func (c *Cache) HighWater() (hw int64, ok bool)
 ```
 
-Reports the current high-water mark and whether `Store` has ever accepted an
-event. On a cache that has never stored anything `ok` is `false` and the `hw`
+Reports the current high-water mark and whether a `Store` has ever advanced it.
+A `Store` advances the mark before it is checked against the window, so `ok` can
+be `true` even when that `Store` was then rejected as late by a concurrent, newer
+one. On a cache that has never stored anything `ok` is `false` and the `hw`
 returned with it is an internal sentinel below every usable epoch: it carries no
 meaning and must not be used.
 
@@ -369,6 +384,7 @@ for range time.Tick(10 * time.Second) {
     metrics.GetHit.Set(float64(s.GetHit))
     metrics.GetMiss.Set(float64(s.GetMiss))
     metrics.GetLate.Set(float64(s.GetLate))
+    metrics.GetFuture.Set(float64(s.GetFuture))
     metrics.Keys.Set(float64(s.Keys)) // a gauge
 }
 ```
@@ -387,9 +403,9 @@ What to alert on:
 - **`Keys`** is the memory gauge. A steady climb means keys are being created
   faster than the janitor removes them; see [Memory management](#memory-management).
 
-`Future` and `GetFuture` exist so the metric names and dashboards can be wired up
-now. They stay at `0` until `MaxFutureSkew` and the `-2` sentinel land, at which
-point they start counting without any change to the export above.
+`Future` and `GetFuture` stay at `0` while `MaxFutureSkew` is disabled, so the
+metrics can be wired up before it is set; once it is, they start counting
+without any change to the export above.
 
 ## Configuration
 
@@ -527,6 +543,168 @@ bounded through four mechanisms:
 Call `Close` to stop the janitor when the cache is no longer needed. `Close` is
 idempotent and safe to call concurrently.
 
+## Approximate counting with `countminsketch`
+
+The cache above keeps a list of buckets per key, so its memory grows with the
+number of keys. The `countminsketch` subpackage implements the same
+`SlidingCache` interface in **memory fixed at construction**: the window of each
+shard is a ring of [count-min sketches](https://en.wikipedia.org/wiki/Count%E2%80%93min_sketch),
+one per `Precision` bucket, so a `Store` or a `Get` touches a fixed number of
+counters whatever the number of keys. The price is that counts are estimates:
+never below the exact count, sometimes above it.
+
+It is an opt-in alternative, not a replacement. Use it when keys are too many to
+hold one by one **and** the caller compares counts against a threshold well
+above the overestimate (see [Sizing](#sizing)). Stay on the exact cache when the
+caller tests `== 0` or `== 1`, when thresholds are small against the traffic of
+the whole window, or when the keys fit in memory: with few keys the sketch takes
+more memory than the exact cache, not less.
+
+```go
+import (
+	"fmt"
+	"time"
+
+	"github.com/mresti/slidingcache"
+	"github.com/mresti/slidingcache/countminsketch"
+)
+
+c, err := countminsketch.New(countminsketch.Config{
+	Precision:  time.Second,
+	WindowSize: time.Minute,
+	EpochUnit:  slidingcache.EpochInSeconds,
+})
+if err != nil {
+	panic(err)
+}
+defer c.Close()
+
+const limit = 100
+if c.Store(time.Now().Unix(), "client-42") >= limit {
+	// Trips at the same event as the exact cache, or earlier.
+	fmt.Println("over the limit")
+}
+```
+
+`*countminsketch.Cache` implements `slidingcache.SlidingCache` and also has
+`HighWater()`, `Stats()` and `Close()`. `Close` is a no-op kept for parity: no
+goroutine runs, because nothing needs sweeping.
+
+### What stays the same
+
+The window semantics are those of the exact cache, checked against it call by
+call in the tests: the mapping of epochs onto `Precision` buckets, the single
+high-water mark that only `Store` advances, the strict liveness rule
+(`t > HW − WindowSize`), out-of-order tolerance, the future guard
+(`MaxFutureSkew`, `Clock`) and the `-1` and `-2` sentinels in the same cases.
+
+### What changes
+
+| Exact cache | `countminsketch` |
+|---|---|
+| Exact count. | Never below the exact count. With one shard, above it by more than `Epsilon × events in the window` with probability at most `Delta`. |
+| First `Store` of a key returns `1`. | May return more than `1`. |
+| `Get` of an absent key returns `0`. | May return more than `0`. |
+| Keys do not affect each other. | Events of other keys can raise the count of yours. They never lower it. |
+| Memory grows with the number of keys; `Store` allocates for a new key. | Memory is fixed by `Epsilon`, `Delta` and `WindowSize / Precision`. `New` reserves all of it and nothing allocates afterwards. |
+| Any `WindowSize / Precision`. | At most 2^20 buckets per window; `New` returns an error above that. |
+| A bucket's count spills into further words. | A counter caps at 2^32−1 events per bucket. Such a `Store` is still accepted and counted in `Stats.Saturated`. |
+| `Stats.Keys`; `GetHit` / `GetMiss` by presence of the key. | No `Keys`. `GetHit` is an estimate above `0`, `GetMiss` an estimate of `0`. |
+| The hash only spreads keys over shards. | The hash decides correctness: two keys with the same 64-bit hash count as one. The default is `hash/maphash` with a seed drawn per cache. |
+| `Store` stays within tens of ns at any traffic density. | Each new bucket costs an expiry per shard; see [Cost](#cost). |
+
+Compare counts with `>=` against a threshold. A rate limiter that trips at
+`count >= limit` trips at the same event as with the exact cache or earlier,
+never later.
+
+### Sizing
+
+`Epsilon` and `Delta` size the sketch: `width = ceil(e / Epsilon)` columns by
+`depth = ceil(ln(1 / Delta))` rows, at most 16 rows. The defaults, `0.001` and
+`0.01`, give 2719 × 5.
+
+**Accuracy.** The overestimate scales with the events of the **whole window**,
+all keys together, not with the key's own count. With the default `Epsilon` and
+`Delta`, one shard and one million live events, an estimate is within 1,000 of
+the exact count with 99% probability. That is harmless against a limit of
+100,000 and useless against a limit of 100. Choose `Epsilon` so that
+`Epsilon × events in the window` is small against the threshold you compare
+with. With more than one shard the bound holds on average over the keys; see
+[Sketch configuration](#sketch-configuration).
+
+**Memory.** `New` reserves about `4 × width × depth` bytes per bucket:
+
+| `Epsilon` | Sketch | 1 min at 1 s | 1 h at 1 min | 5 min at 1 s | 24 h at 1 min | 1 h at 1 s |
+|---|---|---|---|---|---|---|
+| `0.01` | 272 × 5 | 0.3 MB | 0.3 MB | 1.7 MB | 8.0 MB | 20.1 MB |
+| `0.001` (default) | 2719 × 5 | 3.4 MB | 3.4 MB | 16.5 MB | 78.6 MB | 196.4 MB |
+| `0.0001` | 27183 × 5 | 33.7 MB | 33.7 MB | 164.2 MB | 784.2 MB | 1,958.8 MB |
+
+`Delta` at `0.01`, default `Shards`, 1 MB = 10^6 bytes. Memory is proportional to
+the depth: `Delta` `0.1` is 3 rows, `0.001` is 7.
+
+`New` estimates this before allocating anything and returns an error when the
+estimate exceeds `Config.MaxMemoryBytes`, **1 GiB by default** (1,073.7 MB). The
+last cell of the table needs the cap raised explicitly.
+
+### Sketch configuration
+
+`Precision`, `WindowSize`, `EpochUnit`, `MaxFutureSkew` and `Clock` follow the
+rules of the exact cache. There is no `CountBits` and no `SweepInterval`.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `Epsilon` | `float64` | `0.001` | Bound on the overestimate, as a fraction of the events in the window. Strictly between `0` and `1`. |
+| `Delta` | `float64` | `0.01` | Probability that an estimate exceeds that bound. Strictly between `0` and `1`; at most 16 rows. |
+| `Shards` | `int` | up to `16` | Rounded up to a power of two. The columns are divided among the shards, so a shard needs at least 8: the default drops below `16` for a large `Epsilon`, and an explicit value that leaves fewer is an error. |
+| `MaxMemoryBytes` | `int64` | `1 << 30` | Most memory `New` may reserve for the window. |
+| `TimestampBits` | `int` | `43` | Accepted range of bucket timestamps, `±2^TimestampBits` seconds; `39` to `62`. The default matches the exact cache's default `CountBits`. |
+| `DisableRangeGuard` | `bool` | `false` | Same as `TimestampBits: 62`, the arithmetic ceiling. Cannot be combined with `TimestampBits`. |
+
+`Shards` only buys concurrency. With more than one, `Epsilon` and `Delta` hold
+on average rather than per key: a key that shares its shard with a very hot key
+sees a fatter tail, noticeably so below about 40 columns per shard
+(`e / (Epsilon × Shards)`). Memory barely depends on it: 256 shards take about
+7% more than 16 with the default `Epsilon`.
+
+`WithHashFunc` replaces the default hash. It must be deterministic and fixed for
+the lifetime of the cache, and it is called on rejected events too.
+
+### Cost
+
+Measured on an Apple M2, default `Epsilon` and `Shards`, 1 h window at 1 s
+(`benchmarks/countminsketch-phase3-*.txt`):
+
+| | Exact | `countminsketch` |
+|---|---|---|
+| `Store`, 1,000 events per bucket (`StoreDense`) | 62.1 ns | 35.6 ns |
+| `Store`, one hot key (`StoreHotKeyNanos`, 5 min window) | 17.6 ns | 20.8 ns |
+| `Get`, many keys (`GetHitManyKeys`) | 27.7 ns | 16.7 ns |
+| `Store`, a new bucket on every call (`StoreManyKeys`) | 33.6 ns | 765 ns |
+
+The last row is the worst case. The first event a shard sees in a new bucket
+expires that shard's oldest slot, which adds up to about 9 µs per bucket once
+all 16 shards are active. Spread over the events of the bucket, that cost decides
+the comparison. `BenchmarkStoreDensity` sweeps it with 100,000 keys, counting the
+events of all keys together:
+
+| Events per bucket | Exact | `countminsketch` |
+|---|---|---|
+| 1 | 34 ns | 745 ns |
+| 10 | 34 ns | 462 ns |
+| 30 | 36 ns | 275 ns |
+| 100 | 37 ns | 120 ns |
+| 300 | 43 ns | 57 ns |
+| 1,000 | 59 ns | 35 ns |
+| 10,000 | 69 ns | 27 ns |
+
+The sketch is within 3× of the exact cache from about 110 events per bucket and
+faster from about 450. An expiry clears `width × depth` counters, so those
+thresholds move with `1 / Epsilon`.
+
+A jump of the high-water mark expires one slot per bucket skipped, at most the
+whole window: about 0.6 ms per shard for 1,800 buckets.
+
 ## Testing
 
 ```sh
@@ -536,6 +714,14 @@ go test -bench=. -benchtime=1x ./...
 
 The benchmark suite includes a memory-footprint benchmark that reports retained
 heap as `bytes/key`.
+
+The Makefile's bench and fuzz targets run the root package; `PKG` points them at
+another one, a single package for the fuzz targets:
+
+```sh
+make test-bench PKG=./countminsketch
+make test-fuzz-all PKG=./countminsketch FUZZTIME=30s
+```
 
 ## License
 
