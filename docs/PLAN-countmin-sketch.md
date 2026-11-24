@@ -433,8 +433,13 @@ Verificación:
   fuzz de colisiones solo usaba profundidad 1, donde las dos actualizaciones coinciden (con la semilla nueva
   caza «mínimo del agregado» en 500 de 500 ejecuciones); «el mínimo ignora la última fila» solo caía a nivel
   de cache (test nuevo a nivel de anillo).
-- Sin verificar: tests en 32 bit; rama `Stats.Saturated++`; CI de Linux; archivo de benchmarks (tras el commit:
-  hasta entonces el README cita cifras del A/B).
+- CI de Linux en verde en la PR #23.
+- Archivado con `make test-bench-save PR=countminsketch-phase5 PKG=./countminsketch
+  BASELINE=benchmarks/countminsketch-phase3` (primera ejecución real del target con `PKG`; benchstat incluido),
+  sobre el commit 1f42463. Coincide con el A/B: `StoreDense` 35,6 -> 40,2 ns, `StoreHotKeyNanos` 20,8 -> 24,9,
+  `StoreMediumCardinalitySameBucket` 25,5 -> 31,2; densidad 100: 123 ns (3,4× el exacto). RAM igual:
+  196.591.872 B. El README cita ya las cifras del archivo.
+- Sin verificar: tests en 32 bit; rama `Stats.Saturated++`.
 
 Verificación local en todas las fases: `go vet`, tests con `-race` y lint (golangci-lint v2.15.0), todo en
 go1.26.4 y go1.27.3.

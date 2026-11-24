@@ -170,3 +170,37 @@ Medians, ns/op:
 The sketch is within 3x of the exact cache from about 110 events per bucket and
 faster from about 450; 0 allocs/op on both arms. The benchmark is also part of
 the serial archive from now on, since its name starts with `BenchmarkStore`.
+
+`countminsketch-phase5-{serial,parallel}.txt` are the archive after the
+conservative update (`Ring.Add` raises only the key's counters at the minimum of
+its slot), and `countminsketch-phase5-vs-baseline-{serial,parallel}.txt` their
+benchstat comparison with the Phase 3 archive. They are the first files produced
+by the Makefile target pointed at the package:
+```
+make test-bench-save PR=countminsketch-phase5 PKG=./countminsketch BASELINE=benchmarks/countminsketch-phase3
+```
+Medians, ns/op, sketch arm (the exact arm did not change):
+
+| Benchmark | phase 3 | phase 5 | exact |
+|---|---|---|---|
+| `StoreDense` | 35.6 | 40.2 | 59.2 |
+| `StoreMediumCardinalitySameBucket/keys=10000` | 25.5 | 31.2 | 27.2 |
+| `StoreHotKeyNanos` | 20.8 | 24.9 | 17.5 |
+| `StoreHotKeySameBucket` | 20.5 | 24.8 | 17.6 |
+| `StoreWindowBuckets/buckets=1800/density=dense` | 35.0 | 39.7 | n/a |
+| `StoreManyKeys` | 765 | 760 | 33.6 |
+| `GetHitManyKeys` | 16.7 | 16.6 | 27.9 |
+| `ParallelStoreDense` | 21.8 | 23.5 | 21.5 |
+| `ParallelStore` | 159 | 161 | 18.0 |
+
+- A `Store` pays 4 to 6 ns where the counter update dominates (+13% to +23%) and
+  nothing measurable where expiry does. `Get` does not change, nothing
+  allocates, and `MemoryFootprint` reads the same 196,591,872 `heap-bytes`; its
+  ns/op rises 16% because it times the Stores that fill the window.
+- `StoreDensity` is in the serial file from this archive on. Medians, exact /
+  sketch: 1 event per bucket 33.9 / 752; 10: 33.5 / 469; 30: 36.0 / 280; 100:
+  36.0 / 123; 300: 42.1 / 61.9; 1,000: 61.8 / 40.4; 10,000: 69.7 / 31.8. The
+  sketch is within 3x of the exact cache from about 120 events per bucket and
+  faster from about 550 (about 110 and 450 before the conservative update).
+- `StoreDense/impl=exact` and `StoreDensity/events=1000/impl=exact` spread 16%
+  in this file; their medians, 59.2 and 61.8, are the same workload.

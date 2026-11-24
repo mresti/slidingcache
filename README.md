@@ -680,14 +680,15 @@ the lifetime of the cache, and it is called on rejected events too.
 
 ### Cost
 
-Measured on an Apple M2, default `Epsilon` and `Shards`, 1 h window at 1 s:
+Measured on an Apple M2, default `Epsilon` and `Shards`, 1 h window at 1 s
+(`benchmarks/countminsketch-phase5-*.txt`):
 
 | | Exact | `countminsketch` |
 |---|---|---|
-| `Store`, 1,000 events per bucket (`StoreDense`) | 62.1 ns | 40.6 ns |
-| `Store`, one hot key (`StoreHotKeyNanos`, 5 min window) | 17.6 ns | 24.9 ns |
-| `Get`, many keys (`GetHitManyKeys`) | 27.7 ns | 16.7 ns |
-| `Store`, a new bucket on every call (`StoreManyKeys`) | 33.6 ns | 765 ns |
+| `Store`, 1,000 events per bucket (`StoreDense`) | 59.2 ns | 40.2 ns |
+| `Store`, one hot key (`StoreHotKeyNanos`, 5 min window) | 17.5 ns | 24.9 ns |
+| `Get`, many keys (`GetHitManyKeys`) | 27.9 ns | 16.6 ns |
+| `Store`, a new bucket on every call (`StoreManyKeys`) | 33.6 ns | 760 ns |
 
 The last row is the worst case. The first event a shard sees in a new bucket
 expires that shard's oldest slot, which adds up to about 9 µs per bucket once
@@ -697,12 +698,12 @@ events of all keys together:
 
 | Events per bucket | Exact | `countminsketch` |
 |---|---|---|
-| 1 | 34 ns | 753 ns |
-| 10 | 34 ns | 467 ns |
-| 30 | 36 ns | 279 ns |
+| 1 | 34 ns | 752 ns |
+| 10 | 33 ns | 469 ns |
+| 30 | 36 ns | 280 ns |
 | 100 | 36 ns | 123 ns |
-| 300 | 43 ns | 62 ns |
-| 1,000 | 58 ns | 40 ns |
+| 300 | 42 ns | 62 ns |
+| 1,000 | 62 ns | 40 ns |
 | 10,000 | 70 ns | 32 ns |
 
 The sketch is within 3× of the exact cache from about 120 events per bucket and
