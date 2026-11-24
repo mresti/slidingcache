@@ -48,6 +48,9 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 		{"TimestampBits above 62", func(c *Config) { c.TimestampBits = maxTimestampBits + 1 }},
 		{"negative TimestampBits", func(c *Config) { c.TimestampBits = -1 }},
 		{"DisableRangeGuard with TimestampBits", func(c *Config) { c.DisableRangeGuard, c.TimestampBits = true, 50 }},
+		{"negative Shards", func(c *Config) { c.Shards = -1 }},
+		{"Shards above 2^20", func(c *Config) { c.Shards = maxShards + 1 }},
+		{"negative MaxMemoryBytes", func(c *Config) { c.MaxMemoryBytes = -1 }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -74,9 +77,13 @@ func TestNewAcceptsTheBoundaries(t *testing.T) {
 	}{
 		{"defaults", func(*Config) {}},
 		{"WindowSize equal to Precision", func(c *Config) { c.WindowSize = c.Precision }},
-		{"exactly 2^20 buckets", func(c *Config) { c.WindowSize = maxBuckets * time.Second }},
+		// New allocates the whole ring, so the 2^20-bucket cases use the narrowest
+		// sketch, 4 x 1 cells: 16 MiB of slots instead of 57 GB at the default.
+		{"exactly 2^20 buckets", func(c *Config) {
+			c.WindowSize, c.Epsilon, c.Delta = maxBuckets*time.Second, 0.9, 0.9
+		}},
 		{"2^20 buckets rounded up", func(c *Config) {
-			c.Precision, c.WindowSize = 2*time.Second, (2*maxBuckets-1)*time.Second
+			c.Precision, c.WindowSize, c.Epsilon, c.Delta = 2*time.Second, (2*maxBuckets-1)*time.Second, 0.9, 0.9
 		}},
 		{"TimestampBits 39", func(c *Config) { c.TimestampBits = minTimestampBits }},
 		{"TimestampBits 62", func(c *Config) { c.TimestampBits = maxTimestampBits }},
@@ -163,4 +170,105 @@ func TestCloseIsIdempotent(t *testing.T) {
 	if got := c.Store(1_000, "k"); got != 1 {
 		t.Fatalf("Store after Close = %d, want 1: Close stops nothing", got)
 	}
+}
+
+func TestShardsRoundUpToAPowerOfTwo(t *testing.T) {
+	for requested, want := range map[int]int{1: 1, 2: 2, 3: 4, 5: 8, 16: 16, 17: 32} {
+		cfg := validConfig()
+		cfg.Shards = requested
+		if got := len(newTestCache(t, cfg).shards); got != want {
+			t.Errorf("Shards %d gives %d shards, want %d", requested, got, want)
+		}
+	}
+}
+
+// TestDefaultShardsLeaveEveryShardEnoughColumns walks the default down from 16
+// as the sketch narrows, to 1 when not even 2 shards get minShardWidth columns:
+// a default never makes New fail.
+func TestDefaultShardsLeaveEveryShardEnoughColumns(t *testing.T) {
+	tests := []struct {
+		epsilon      float64
+		totalColumns int
+		wantShards   int
+	}{
+		{0, 2719, 16},
+		{0.01, 272, 16},
+		{0.05, 55, 4},
+		{0.1, 28, 2},
+		{0.19, 15, 2},
+		{0.2, 14, 1},
+		{0.9, 4, 1},
+	}
+	for _, tt := range tests {
+		cfg := validConfig()
+		cfg.Epsilon = tt.epsilon
+		layout := mustLayout(t, cfg)
+		if total, _, _ := cfg.dimensions(); total != tt.totalColumns {
+			t.Fatalf("Epsilon %v gives %d columns, want %d", tt.epsilon, total, tt.totalColumns)
+		}
+		if layout.shards != tt.wantShards {
+			t.Errorf("Epsilon %v defaults to %d shards, want %d", tt.epsilon, layout.shards, tt.wantShards)
+		}
+		if layout.shards > 1 && layout.shardWidth < minShardWidth {
+			t.Errorf("Epsilon %v leaves %d columns per shard, below %d", tt.epsilon, layout.shardWidth, minShardWidth)
+		}
+		if got := len(newTestCache(t, cfg).shards); got != tt.wantShards {
+			t.Errorf("New with Epsilon %v built %d shards, want %d", tt.epsilon, got, tt.wantShards)
+		}
+	}
+}
+
+// TestShardsAcceptTheMaximum sizes 2^20 shards without building them, which
+// would need gigabytes: the bound is inclusive.
+func TestShardsAcceptTheMaximum(t *testing.T) {
+	cfg := validConfig()
+	cfg.Shards, cfg.Epsilon = maxShards, 3e-7
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate with Shards 2^20: %v", err)
+	}
+	if layout := mustLayout(t, cfg); layout.shards != maxShards || layout.shardWidth < minShardWidth {
+		t.Fatalf("Shards 2^20 gives %d shards of %d columns, want 2^20 of at least %d",
+			layout.shards, layout.shardWidth, minShardWidth)
+	}
+}
+
+func TestShardsTooManyForEpsilonAreRejected(t *testing.T) {
+	cfg := validConfig()
+	cfg.Epsilon, cfg.Shards = 0.05, 8
+	_, err := New(cfg)
+	if err == nil {
+		t.Fatal("New with 7 columns per shard succeeded, want an error")
+	}
+	parts := []string{
+		"Epsilon 0.05", "55 columns", "7 per shard", "8 Shards", "minimum of 8", "fewer Shards", "smaller Epsilon",
+	}
+	for _, part := range parts {
+		if !strings.Contains(err.Error(), part) {
+			t.Errorf("error %q does not mention %q", err, part)
+		}
+	}
+
+	cfg.Shards = 4
+	if c := newTestCache(t, cfg); len(c.shards) != 4 {
+		t.Fatalf("New with 14 columns per shard built %d shards, want 4", len(c.shards))
+	}
+	cfg.Epsilon, cfg.Shards = 0.9, 1
+	newTestCache(t, cfg)
+}
+
+// TestTwoShardsNeedMinShardWidthColumnsEach pins the column check at the
+// smallest shard count it applies to.
+func TestTwoShardsNeedMinShardWidthColumnsEach(t *testing.T) {
+	cfg := validConfig()
+	cfg.Shards, cfg.Epsilon = 2, 0.2
+	if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), "7 per shard") {
+		t.Fatalf("New with 2 Shards of 7 columns = %v, want the minimum-columns error", err)
+	}
+
+	cfg.Epsilon = 0.19
+	if layout := mustLayout(t, cfg); layout.shards != 2 || layout.shardWidth != minShardWidth {
+		t.Fatalf("Epsilon 0.19 with 2 Shards gives %d shards of %d columns, want 2 of %d",
+			layout.shards, layout.shardWidth, minShardWidth)
+	}
+	newTestCache(t, cfg)
 }

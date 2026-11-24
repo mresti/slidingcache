@@ -11,8 +11,9 @@ Código vía Pedro, PRs vía Yago. Cifras medidas en Apple M2, sin locks salvo q
 | Paquete cache | `github.com/mresti/slidingcache/countminsketch` (público, implementa `SlidingCache`) |
 | Paquete sketch | `github.com/mresti/slidingcache/internal/countmin` |
 | Dependencia `nalgeon/unsure/countmin` | descartada; sketch propio (§2) |
-| ε con shards | global, columnas repartidas entre shards (§3). RAM no depende de `Shards` |
+| ε con shards | global, columnas repartidas entre shards (§3). La RAM casi no depende de `Shards`: +7% con 256 frente a 16, ε por defecto |
 | Contadores | uint32 por slot + uint64 en el agregado, con saturación |
+| Almacenamiento | un array plano por shard, reservado entero en `New` (§3, medido el 2026-11-24) |
 | Actualización | clásica (+1 en todas las filas) en el MVP; conservative update después (Fase 5) |
 | Rango de epochs | todo opcional por config: cambiar el rango y desactivar el guard (forma abajo) |
 | Adopción | consumidores con `== 0`/`== 1` siguen en el exacto; gate evaluado con los datos de la librería (§4) |
@@ -32,6 +33,10 @@ Forma del rango (Fase 2):
 Aceptado el 2026-11-24:
 - Tope de 2^20 buckets por ventana (`New` da error por encima).
 - Fase 3: estimación de RAM y tope configurable, para que un ε diminuto falle en `New` y no al reservar.
+- Ancho mínimo por shard: 8 columnas. Tope de RAM: `Config.MaxMemoryBytes`, 1 GiB por defecto. La
+  estimación no se exporta: solo sale en el mensaje de error.
+- Objetivo de rendimiento re-alcanzado: `Store` <= 3× el exacto desde ~110 eventos por bucket en toda la
+  cache; más lento por debajo (§7, Fase 3).
 
 Propuestas mías sin objeción:
 - Sin `SweepInterval` ni janitor: la RAM está acotada por construcción. `Close` queda como no-op por paridad.
@@ -95,10 +100,26 @@ filas y saturación, reescritas; si se copia código, va con su aviso MIT.
 que `Shards` sigue siendo solo concurrencia, como hoy. "Literal" no es más preciso: es la misma estructura
 con ε/S y S× RAM (69,6 MB × 1800 buckets = 125 GB con 128 shards). Quien quiera esa precisión baja ε.
 - `ancho_total = ceil(e/ε)`, `ancho_shard = ceil(ancho_total/Shards)`, `filas = ceil(ln 1/δ)` (máx. 16).
-- `New` devuelve error si `ancho_shard` queda por debajo de un mínimo (valor a fijar en Fase 2 con simulación).
-- RAM ≈ `ceil(W/P) · ancho_total · filas · 4 B`, más la sobrecarga por slot (cabecera, redondeo del
-  allocator): con 128 shards y ε por defecto un slot son 440 B de celdas y ~15% extra. Si el gate de RAM de
-  Fase 3 no pasa, un array plano por shard la elimina.
+- `New` devuelve error si `ancho_shard` < 8 (constante `minShardWidth`). Es un guard contra el precipicio, no
+  una garantía por shard: simulado con Zipf 1.1/1.5 y 100 keys calientes, con ancho <= 4 decenas de shards
+  tienen del 10% al 50% de sus keys por encima de ε·N; de 6 a 12 la degradación es gradual. Las colas igualan
+  a las del sketch global desde ~40 columnas por shard (p99.9 a ε=1e-3, Zipf 1.1: 2038 global, 2151 con 43,
+  2302 con 22, 2735 con 11, 6827 con 3). ε por defecto con 256 shards da ancho 11: se acepta, con cola más gorda
+  para las keys que comparten shard con una key muy caliente.
+- RAM = `Shards · (B · ancho_shard · filas · 4 B + B · 8 B + ancho_shard · filas · 8 B)`, con `B = ceil(W/P)`.
+
+Estructura, medida en estado estable (3600 buckets, 5 filas, ancho total 2719, M2):
+
+| Shards | celdas | un sketch por slot: heap / ciclo de GC | array plano por shard (16 B de metadatos por slot): heap / GC |
+|---|---|---|---|
+| 16 | 196 MB | +4,3% / 1,2 ms | +0,6% / 0,10 ms |
+| 128 | 203 MB | +22% / 6,5 ms | +4,5% / 0,11 ms |
+| 256 | 203 MB | +42% / 9,2 ms | +8,6% / 0,15 ms |
+| 1024 | 221 MB | +155% / 25 ms | +33% / 0,32 ms |
+
+**Elegido: array plano**, con 8 B de metadatos por slot (la mitad de lo medido). Con un sketch por slot la RAM
+dependía de `Shards`, contra la decisión de §1. Consecuencia: `New` reserva toda la ventana de una vez y
+después no se aloca nada.
 
 ## 4. Gate de adopción — cerrado con los datos de la librería
 
@@ -120,8 +141,9 @@ Workload de `PLAN-v1.3` (100K keys × 10K ev/key en 30 min, 1800 buckets, ~1,8 G
   de keys poco densas **y** consumidores que comparan contra un umbral `T >> N/ancho`.
 - Consumidores con `== 0` o `== 1` no pueden usar el sketch (una key ausente puede dar > 0 y una nueva > 1):
   siguen en el exacto.
-- `BenchmarkMemoryFootprint` (100K keys × 10 buckets, 19,5 MB exacto): sketch (0.001, 0.01) con slots
-  perezosos ≈ 0,6 MB, pero sobrecuenta ~+300 sobre un valor real de 10. Misma conclusión.
+- `BenchmarkMemoryFootprint` (100K keys × 10 buckets, 19,5 MB exacto): el sketch (0.001, 0.01) reserva la
+  ventana entera de `benchConfig` (3600 buckets, 196 MB) aunque solo se usen 10, y sobrecuenta ~+300 sobre
+  un valor real de 10. Misma conclusión.
 - RAM exacto ≈ `K · (115 B + 8 B · buckets vivos/key)` (aprox., de un punto de `MemoryFootprint`).
 - Los benches y tests del paquete nuevo usan los mismos datos que los de la librería (`benchConfig`,
   `makeKeys`, 100K keys × 10 ventanas, workload de `PLAN-v1.3`) para que las cifras sean comparables.
@@ -138,17 +160,19 @@ func (s *Sketch) Count(item []byte) uint64; Total() uint64
 func (s *Sketch) AddHash(h uint64); CountHash(h uint64) uint64   // hash ya calculado
 func (s *Sketch) Reset()
 
-func NewAggregate(width, depth int) (*Aggregate, error)          // celdas uint64, mismos índices
-func (a *Aggregate) NewSlot() *Sketch                            // slot con sus dimensiones
-func (a *Aggregate) Add(slot *Sketch, h uint64) (estimate uint64, saturated bool) // slot+agregado, una pasada
-func (a *Aggregate) Count(h uint64) uint64
-func (a *Aggregate) Sub(slot *Sketch) error                      // caducar un slot
-func (a *Aggregate) AddSketch(slot *Sketch) error                // reconstruir desde supervivientes
-func (a *Aggregate) Reset()
+func NewRing(width, depth, slots int) (*Ring, error)            // slots uint32 en un array + agregado uint64
+func (r *Ring) Slots() int
+func (r *Ring) Add(slot int, h uint64) (estimate uint64, saturated bool) // slot+agregado, una pasada
+func (r *Ring) Count(h uint64) uint64                           // estimación del agregado
+func (r *Ring) Expire(slot int)                                 // agregado -= slot; slot a cero
+func (r *Ring) Reset()
+func (r *Ring) AppendSlotCells(dst []uint32, slot int) []uint32 // copias, para comprobar I1 desde fuera
+func (r *Ring) AppendAggregateCells(dst []uint64) []uint64
 
 func ShardOf(h uint64, bits uint) uint64                         // shard de h entre 1<<bits, con salt propio
 ```
-- `Sketch`: celdas uint32. `Aggregate`: suma celda a celda de los slots vivos de una ventana.
+- `Sketch`: celdas uint32, independiente. `Ring`: los slots de una ventana en un array plano más su
+  agregado (suma celda a celda). Sustituye a `Aggregate` de la Fase 1 (medición de §3).
 - Índice de la fila i: `((h·salt_i) >> 32) · ancho >> 32`. La shard se elige igual, con su propio salt.
 - Saturación: una celda de slot en 2^32−1 no sube más, ni la del agregado, para que I1 se mantenga.
 
@@ -158,11 +182,14 @@ reglas que raíz; más `Epsilon` (0 -> 0.001), `Delta` (0 -> 0.01), `TimestampBi
 CountBits ni SweepInterval.
 `New`, `Store`, `Get`, `Close` (no-op, por paridad), `HighWater`, `Stats`, `WithHashFunc`.
 Reutiliza de raíz: interface, `LateEvent`, `FutureEvent`, `EpochUnit`, `HashFunc`.
-- `Shards` entra en la Fase 3: la Fase 2 tiene una sola shard y no acepta un campo que ignoraría.
+- `Shards` (Fase 3), mismas reglas que raíz (0..2^20, redondeo a potencia de dos). Por defecto: la mayor
+  potencia de dos <= 16 que deja `ancho_shard` >= 8, para que un valor por defecto nunca haga fallar `New`.
+- `MaxMemoryBytes` (Fase 3): tope de la RAM que `New` puede reservar; 0 -> 1 GiB. Se comprueba antes de
+  reservar nada; por encima, error con la estimación.
 - El anillo se reserva entero: `New` devuelve error si `ceil(W/P)` > 1.048.576 buckets (2^20).
 
-Por shard: `ring []slot` (len B = ceil(W/P); slot = {timestamp, *Sketch}, alloc perezoso y reutilizado) +
-agregado + `applied` (cutoff ya aplicado).
+Por shard: `countmin.Ring` de B = ceil(W/P) slots con `ancho_shard` columnas + `timestamps []int64` (8 B
+por slot; `math.MinInt64` = slot muerto) + `applied` (cutoff ya aplicado). Todo reservado en `New`.
 Invariantes: **I1** agregado == Σ slots vivos, celda a celda; **I2** slot vivo ⇔ `applied < ts <= HW`; **I3** `applied` monótono.
 
 ```
@@ -173,16 +200,18 @@ ts <= HW-window                 -> Late++, -1 (rechazo rápido pre-lock)
 h := hash(key)                                       // 1 hash por op, sobre el string
 lock shard; cutoff := HW.Load()-window               // re-derivado bajo lock, como raíz
 ts <= cutoff                    -> Late++, -1
-expireTo(cutoff)                                     // agregado -= slots caducados; Reset
-slot := ring[floorMod(ts/precision, B)]; alloc/retag si hace falta
+expireTo(cutoff)                                     // agregado -= slots caducados; slots a cero
+slot := floorMod(ts/precision, B); se marca vivo si estaba muerto
 slot + agregado += 1 en las celdas de h; Accepted++
 return min de las celdas del agregado                // O(filas)
 ```
 - `Get`: mismos chequeos, `expireTo`, lectura del agregado. No escribe celdas.
-- `expireTo`, Fase 2: recorre todos los slots y caduca (`Sub` + `Reset`) los vivos con `ts <= cutoff`. Sin
-  aritmética de distancias, así que el centinela de una cache virgen no puede desbordar. Fase 3, con medidas:
-  recorrer solo el tramo caducado, reconstruir desde los supervivientes si k > B/2, y todo a cero si el salto
-  >= ventana. La expiración es exacta respecto al HW visto bajo lock, también si lo avanzó otra shard.
+- `expireTo` (Fase 3): un cutoff viejo no cambia nada; sin slots vivos solo anota el cutoff (así una cache
+  virgen no recorre desde el centinela); si la distancia `cutoff − applied` cubre el anillo, lo recorre
+  entero; si no, visita solo los buckets de `(applied, cutoff]`, cada uno en su índice. El recorrido es
+  completo porque todo timestamp vivo está en `(applied, applied + W]`: como mucho B buckets seguidos, sin
+  dos en el mismo índice. La expiración es exacta respecto al HW visto bajo lock, también si lo avanzó otra
+  shard: una shard sin tráfico se queda atrás y se pone al día en su siguiente operación.
 - Un slot se reinicia al caducar. Un slot vivo con otro timestamp en el índice de `ts` es un bug: los tests
   lo detectan, el código nunca lo reetiqueta.
 - Hash por defecto `maphash.String(seed, key)` con seed por Cache: 4-5 ns, 0 allocs (`fnv1a` del repo: 9-39 ns).
@@ -203,12 +232,15 @@ lecturas de Clock, regla de vida estricta, fuera de orden, rechazo tardío sin e
 | key nueva -> `Store` = 1 | `>= 1` |
 | key ausente -> `Get` = 0 | `>= 0` (falso positivo) |
 | keys aisladas | eventos de otras keys pueden subir tu conteo |
-| RAM ∝ keys | RAM fija; **más** que el exacto con pocas keys |
+| RAM ∝ keys, crece con el uso | RAM fija, reservada entera en `New`; **más** que el exacto con pocas keys; tope `MaxMemoryBytes` (1 GiB) |
+| `Shards` por defecto 16 | hasta 16: menos si ε deja < 8 columnas por shard; `Shards` explícito así -> error de `New` |
+| conteo exacto con cualquier `Shards` | con `Shards` > 1 la cota ε/δ vale de media, no por key: cola más gorda junto a una key muy caliente |
 | `Stats.Keys`, `GetHit/GetMiss` por presencia | sin `Keys`; hit/miss por estimación |
 | `HashFunc` solo reparte shards | su calidad afecta a la corrección (colisión 64 bit = keys fusionadas) |
 | count sin tope (spill) | tope 2^32−1 por celda y bucket |
 | `Get` no muta | rota slots internamente (no observable) |
-| prune O(1) amortizado | pico de rotación en cambio de bucket / salto de HW |
+| prune O(1) amortizado | cada cambio de bucket caduca un slot por shard (~340 ns); un salto de HW, uno por bucket saltado |
+| `Store` ~34 ns con cualquier densidad | más rápido que el exacto desde ~450 eventos por bucket; 3× a ~110; 22× con 1 |
 | cualquier `WindowSize/Precision` | máximo 2^20 buckets por ventana; por encima, error de `New` |
 
 Se mantiene en single-thread: `Store(k)` == `Get` previo + 1, si ese `Store` no avanza el HW ni satura una celda.
@@ -246,13 +278,68 @@ floorDiv, cutoffFor, advanceHighWater, isFuture, validadores, unixClock). Anillo
 simple, un mutex. Sin `Config.Shards` y sin benchmarks (Fase 3). Gate: fuzz diferencial con tiempo real de
 fuzzing, 0 divergencias; `make ci` verde en los dos toolchains. `Stats.Saturated` queda con una rama sin
 cubrir: saturar una celda exige 2^32 eventos en un mismo bucket.
-**Fase 3 — shards, concurrencia, rendimiento, memoria.** Benches espejo de los actuales (`StoreManyKeys`,
-`StoreHotKeyNanos`, `GetHitManyKeys`, `ParallelStore`, `StoreSteadyState`, `StoreAdvancingHighWater`,
-`MemoryFootprint`) archivados en `benchmarks/`. Gate de corrección: fuzz diferencial con Shards > 1, test de
-HW avanzado por otra shard y `-race`, 0 divergencias (la Fase 2 no ejercita la shard atrasada). Gates de
-rendimiento: 0 allocs tras calentar; coste independiente de B (B=60 vs B=1800 dentro de ±10%); RAM == fórmula
-(con la sobrecarga por slot de §3) ±5% e independiente del nº de keys. Objetivo provisional `Store` <= 3× el
-exacto; se fija con datos.
+**Fase 3 — shards, concurrencia, rendimiento, memoria. HECHA (2026-11-24, rama `feat/countmin-phase-3-shards`).**
+Pasos, cada uno con su gate:
+0. Array plano (`countmin.Ring`) con una sola shard, sin cambio de comportamiento. **Hecho:** `make ci` verde
+   en go1.26.4 y go1.27.3 (cobertura 99,0% / 98,2%); 6 targets de fuzz, 25 s cada uno, 12,6M ejecuciones, 0
+   fallos; `Ring` a 2719×5: Add 9,5 ns, Count 4,4 ns, caducar 5,7 µs (límites 12 / 8,5 / 11), 0 allocs.
+   37 mutantes elegidos a mano sobre `Ring` y la ventana: 32 cazados, 1 no compila, 2 equivalentes en 64 bit
+   (tamaño de celda en la validación; valor inicial del mínimo) y 3 huecos de tests que se cierran en el paso 1
+   (borde exacto de saturación; `applied` avanza; `applied` no retrocede con un cutoff viejo).
+1. `Config.Shards`: ring, mutex y contadores por shard; HW global. Gate: fuzz diferencial con Shards > 1, test
+   de la shard atrasada (HW avanzado por otra shard) y `-race`, 0 divergencias.
+2. Estimación de RAM y `Config.MaxMemoryBytes`, comprobados antes de reservar.
+   **Hechos 1 y 2:** `make ci` verde en los dos toolchains (cobertura 98,5% / 98,2%). Los 4 targets de fuzz
+   eligen 1, 2 o 4 shards: 25 s cada uno, 169K ejecuciones, 0 divergencias (más lentos que antes: tras cada op
+   se comprueban las celdas crudas de todas las shards). Test determinista de la shard atrasada y test
+   concurrente con `-race`. 66 mutantes a mano (shards, tope de RAM, lógica heredada): 62 cazados; 1
+   equivalente (cuál de los dos contadores de `Late` sube) y 3 huecos de tests que se cierran en el paso 3
+   (`Shards: 2` demasiado estrecho; valor exacto del tope por defecto; un `Store` en el propio HW no consulta
+   el reloj). El `HashFunc` del usuario ahora también se llama en los rechazos, como en raíz: hace falta para
+   contar el rechazo en la shard de la key.
+3. Benches espejo de los actuales en `countminsketch/cache_bench_test.go`, con el exacto como brazo de
+   referencia (`impl=exact` / `impl=sketch`, los dos a través de la interface), más los propios del sketch
+   (`StoreDense`, `ParallelStoreDense`, `StoreWindowBuckets`, `StoreHighWaterJump`). Gates: 0 allocs; RAM ==
+   estimación ±5% e independiente del nº de keys. **Archivado:**
+   `benchmarks/countminsketch-phase3-{serial,parallel}.txt`, medido sobre el commit 726e1c0 (lo nombra la
+   cabecera).
+4. `expireTo` recorre solo los buckets de `(applied, cutoff]`; sin slots vivos solo anota el cutoff; si la
+   distancia cubre el anillo, lo recorre entero. Gate: coste independiente de B (B=60 vs B=1800 dentro de ±10%).
+   **Hechos 3 y 4:** `make ci` verde en los dos toolchains (cobertura 98,6% / 98,2%); 6 targets de fuzz, 0
+   fallos (761K ejecuciones en los 4 del cache, 30 s cada uno; el modo exacto solo 19K, es el más lento);
+   test de equivalencia del recorrido nuevo contra el recorrido completo (6 configuraciones, 4 semillas, 3000
+   pasos); 21 mutantes a mano, 20 cazados, el otro solo cambia velocidad. Los 3 huecos del paso 1 cerrados.
+
+Resultados (M2, go1.27.3, mediana de 10, del archivo de `benchmarks/`; ε y shards por defecto: 2719×5 entre
+16 shards, 1 h a 1 s; la última columna es de la ejecución anterior al paso 4, mediana de 5):
+
+| Benchmark | exacto | sketch | sketch antes del paso 4 |
+|---|---|---|---|
+| `StoreDense` (1000 eventos por bucket) | 62,1 ns | 35,6 ns | 60,0 ns |
+| `StoreHotKeyNanos` | 17,6 ns | 20,8 ns | 21,0 ns |
+| `StoreHotKeySameBucket` | 17,6 ns | 20,5 ns | 20,7 ns |
+| `GetHitManyKeys` | 27,7 ns | 16,7 ns | 16,7 ns |
+| `ParallelStoreDense` (4 CPU) | 21,7 ns | 21,8 ns | 27,4 ns |
+| `StoreManyKeys` (un bucket nuevo por op) | 33,6 ns | 765 ns | 3193 ns |
+| `StoreSingleKey` (un bucket nuevo por op) | 24,4 ns | 342 ns | 1933 ns |
+| `ParallelStore` (4 CPU, un bucket nuevo por op) | 18,0 ns | 159 ns | 1035 ns |
+| `ParallelMixed` (4 CPU) | 12,7 ns | 43,6 ns | 292 ns |
+
+- Objetivo `Store` <= 3× el exacto: se cumple desde ~110 eventos por bucket en toda la cache, no por
+  debajo. Barrido medido (100K keys, 1 h a 1 s, ε por defecto), exacto / sketch en ns: 1 evento por bucket
+  34 / 759; 10: 34 / 463; 30: 36 / 277; 100: 37 / 119; 300: 43 / 57; 1000: 55 / 35; 10.000: 72 / 26. El
+  coste de caducar (~10 µs por bucket: 16 slots) se reparte entre los eventos del bucket y crece como 1/ε.
+  **Re-alcance del objetivo original, aceptado el 2026-11-24.**
+- Peor caso, un bucket nuevo por operación: cada `Store` caduca un slot entero (850 celdas con 16 shards), 14× a
+  23× el exacto. Es el coste de caducar: `StoreHighWaterJump` da 338 ns por slot y 559 µs por una ventana
+  entera de 1800 slots, una vez por shard.
+- Coste independiente de B: 34,0 ns (60 buckets) y 35,0 ns (1800), denso. En disperso, 451 y 711 ns: es
+  localidad de memoria (anillo de 3,3 MB frente a 98 MB), no el algoritmo; con un anillo que cabe en caché en
+  los dos casos (ε=0,02) sale 114 y 119 ns.
+- RAM: 196.591.872 B medidos frente a 196.409.600 B estimados (+0,09%), igual con 100K y con 1M de keys.
+- 0 allocs por operación en todas las filas del sketch.
+- No se implementa la reconstrucción desde supervivientes (ahorro máximo 2× en un salto de HW, que es raro).
+- Sin verificar: tests en 32 bit (solo vet de los paquetes nuevos); `Stats.Saturated` sigue sin cubrir.
 **Fase 4 — docs y deuda.** README (sección sketch, sizing, tabla §6), contrato de la interface, Makefile
 (`PKG`), y opcional extraer `internal/window` (toca raíz -> gate 3%).
 **Fase 5 — conservative update (después del MVP).** Solo sube las celdas por debajo del nuevo mínimo del
@@ -300,10 +387,15 @@ go1.26.4 y go1.27.3.
 - Muchas shards con ε grande: `ancho_shard` diminuto -> error de `New`.
 - Key en la shard de un heavy hitter (1/Shards de las keys): cota formal más débil que la media; en la
   simulación de §3 no se nota en p99, sí puede en el máximo.
-- Salto de HW: pico de latencia bajo el lock de la shard, O(min(k, B−k)·celdas).
+- Salto de HW: pico de latencia bajo el lock de la shard, un slot por bucket saltado: medido 338 ns por slot
+  y 559 µs por una ventana entera de 1800 slots (16 shards, ε por defecto), una vez por shard. Con
+  `Shards: 1` el mismo salto recorre el anillo entero bajo el único lock.
+- Tráfico disperso: con pocos eventos por bucket el coste de caducar domina (22× el exacto con 1 evento
+  por bucket, 3× con ~110, igual con ~450; ε por defecto). El umbral crece como 1/ε.
 - Primer `expireTo` de una cache virgen: la distancia al centinela desborda si se resta sin saturar.
 - Saturación de celda (Precision grande + key muy caliente): el conteo se queda corto; contarlo en Stats.
-- Cambiar ε/δ exige cache nueva. Primer evento de cada slot aloca (calentamiento = 1 ventana).
+- Cambiar ε/δ exige cache nueva. `New` reserva toda la ventana; después no se aloca nada.
+- Config que pide más RAM que `MaxMemoryBytes`: error de `New`, no un fallo al reservar.
 - `HashFunc` débil del usuario fusiona keys. Plataformas de 32 bit: `int` de retorno, igual que hoy.
 
 ## 10. Deuda técnica detectada
@@ -327,7 +419,9 @@ go1.26.4 y go1.27.3.
 
 12. `isFuture` suma `bucket(clock()) + skew` sin guardar el desbordamiento: un `Clock` que devuelva un valor
     cercano a MaxInt64 lo hace negativo y rechaza todo como futuro. Está en raíz y replicado en `countminsketch`.
+13. `GOOS=linux GOARCH=386 go vet ./...` falla en `main`: `slidingcache_test.go:772` pasa `1<<62 + 1` a un
+    `int`. Los tests de raíz no compilan en 32 bit; los paquetes nuevos sí pasan vet. La CI solo corre amd64.
 
 ## 11. Preguntas abiertas
 
-Ninguna bloqueante. Pendiente de dato externo: el umbral real del consumidor, que la librería no recoge (§4).
+Ninguna. Pendiente de dato externo: el umbral real del consumidor, que la librería no recoge (§4).

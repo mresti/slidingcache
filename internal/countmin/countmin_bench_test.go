@@ -17,7 +17,7 @@ var benchSizes = []struct{ width, depth int }{
 const (
 	benchKeyCount = 10_000
 	benchSlots    = 8
-	// benchSlotShift rotates the slot Aggregate.Add counts into every 4096
+	// benchSlotShift rotates the slot Ring.Add counts into every 4096
 	// operations, the same rotation as the prototype the gate compares with.
 	benchSlotShift = 12
 )
@@ -55,17 +55,13 @@ func mustBenchSketch(b *testing.B, width, depth int) *Sketch {
 	return s
 }
 
-func mustBenchAggregate(b *testing.B, width, depth int) (*Aggregate, []*Sketch) {
+func mustBenchRing(b *testing.B, width, depth int) *Ring {
 	b.Helper()
-	a, err := NewAggregate(width, depth)
+	r, err := NewRing(width, depth, benchSlots)
 	if err != nil {
 		b.Fatal(err)
 	}
-	slots := make([]*Sketch, benchSlots)
-	for i := range slots {
-		slots[i] = a.NewSlot()
-	}
-	return a, slots
+	return r
 }
 
 func BenchmarkSketchAddHash(b *testing.B) {
@@ -124,49 +120,45 @@ func BenchmarkSketchCount(b *testing.B) {
 	}
 }
 
-func BenchmarkAggregateAdd(b *testing.B) {
+func BenchmarkRingAdd(b *testing.B) {
 	hashes := benchHashes()
 	for _, size := range benchSizes {
 		b.Run(benchName(size.width, size.depth), func(b *testing.B) {
-			a, slots := mustBenchAggregate(b, size.width, size.depth)
+			r := mustBenchRing(b, size.width, size.depth)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				estimate, _ := a.Add(slots[(i>>benchSlotShift)%benchSlots], hashes[i%benchKeyCount])
+				estimate, _ := r.Add((i>>benchSlotShift)%benchSlots, hashes[i%benchKeyCount])
 				benchSink += estimate
 			}
 		})
 	}
 }
 
-func BenchmarkAggregateCount(b *testing.B) {
+func BenchmarkRingCount(b *testing.B) {
 	hashes := benchHashes()
 	for _, size := range benchSizes {
 		b.Run(benchName(size.width, size.depth), func(b *testing.B) {
-			a, _ := mustBenchAggregate(b, size.width, size.depth)
+			r := mustBenchRing(b, size.width, size.depth)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				benchSink += a.Count(hashes[i%benchKeyCount])
+				benchSink += r.Count(hashes[i%benchKeyCount])
 			}
 		})
 	}
 }
 
-// BenchmarkAggregateExpire measures expiring one slot: subtracting it from the
+// BenchmarkRingExpire measures expiring one slot: subtracting it from the
 // aggregate and emptying it for reuse.
-func BenchmarkAggregateExpire(b *testing.B) {
+func BenchmarkRingExpire(b *testing.B) {
 	for _, size := range benchSizes {
 		b.Run(benchName(size.width, size.depth), func(b *testing.B) {
-			a, slots := mustBenchAggregate(b, size.width, size.depth)
+			r := mustBenchRing(b, size.width, size.depth)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				slot := slots[i%benchSlots]
-				if err := a.Sub(slot); err != nil {
-					b.Fatal(err)
-				}
-				slot.Reset()
+				r.Expire(i % benchSlots)
 			}
 		})
 	}

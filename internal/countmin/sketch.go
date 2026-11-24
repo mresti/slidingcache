@@ -10,8 +10,8 @@ import (
 // that reaches it stays there instead of wrapping, so an item counted beyond it
 // is underestimated rather than reported near zero.
 //
-// The zero value is not usable; build one with New, NewSized or
-// Aggregate.NewSlot. A Sketch is not safe for concurrent use.
+// The zero value is not usable; build one with New or NewSized. A Sketch is not
+// safe for concurrent use.
 type Sketch struct {
 	// cells holds depth rows of width counters, row r at [r*width, (r+1)*width).
 	cells []uint32
@@ -38,16 +38,11 @@ func NewSized(width, depth int) (*Sketch, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newSketch(sh, width*depth), nil
-}
-
-// newSketch builds a sketch of a validated shape holding cellCount cells.
-func newSketch(sh shape, cellCount int) *Sketch {
 	return &Sketch{
-		cells: make([]uint32, cellCount),
+		cells: make([]uint32, width*depth),
 		shape: sh,
 		seed:  maphash.MakeSeed(),
-	}
+	}, nil
 }
 
 // Add counts one occurrence of item.

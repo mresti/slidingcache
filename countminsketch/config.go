@@ -3,6 +3,7 @@ package countminsketch
 import (
 	"errors"
 	"fmt"
+	"math/bits"
 	"time"
 
 	"github.com/mresti/slidingcache"
@@ -26,12 +27,28 @@ const (
 	minTimestampBits = 39
 	maxTimestampBits = 62
 
-	// maxBuckets bounds the ring of sketches, which New preallocates whole.
+	// maxBuckets bounds the ring of sketches, which New allocates whole.
 	maxBuckets = 1 << 20
+
+	// maxShards matches the root package's bound on Config.Shards, and
+	// defaultMaxShards its default, which a narrow sketch lowers.
+	maxShards        = 1 << 20
+	defaultMaxShards = 16
+	// minShardWidth is the fewest columns a shard may have when there is more
+	// than one. It guards against a cliff, not a per-shard guarantee: simulated
+	// with Zipf 1.1 and 1.5 and 100 hot keys, at 4 columns per shard or fewer
+	// tens of shards have 10-50% of their keys above Epsilon times the window's
+	// events; from 6 to 12 columns the degradation is gradual, and the tails
+	// match those of an unsharded sketch from about 40 columns per shard.
+	minShardWidth = 8
+
+	// defaultMaxMemoryBytes is the most memory New reserves when
+	// Config.MaxMemoryBytes is zero.
+	defaultMaxMemoryBytes = 1 << 30
 )
 
-// Config configures a Cache. The window fields follow the same rules as
-// slidingcache.Config; the sketch fields replace its CountBits, Shards and
+// Config configures a Cache. The window fields and Shards follow the same rules
+// as slidingcache.Config; the sketch fields replace its CountBits and
 // SweepInterval, which have no meaning here.
 type Config struct {
 	// Precision is the bucket granularity to which timestamps are truncated.
@@ -41,6 +58,21 @@ type Config struct {
 	// exact multiple of time.Second. The window holds ceil(WindowSize/Precision)
 	// buckets, which must not exceed 2^20.
 	WindowSize time.Duration
+	// Shards is the number of internal shards, each an independently locked
+	// partition of the keys with its own share of the sketch's columns. It is
+	// rounded up to a power of two and must be between 0 and 1<<20. Zero selects
+	// the largest power of two up to 16 that leaves every shard at least 8
+	// columns, and 1 when no power of two does. An explicit value that leaves
+	// fewer than 8 columns per shard makes New return an error.
+	//
+	// Shards only buys concurrency: the columns are divided among the shards, so
+	// accuracy and memory are set by Epsilon and Delta. More shards add memory
+	// only by rounding each shard's columns up and by 8 bytes per bucket per
+	// shard: with the default Epsilon, 256 shards take about 7% more than 16.
+	// With fewer than about 40 columns per shard, e/(Epsilon*Shards), the keys
+	// that share a shard with a very hot key see fatter tails than with one
+	// shard.
+	Shards int
 	// EpochUnit is the unit of the epoch arguments passed to Store and Get. Its
 	// zero value is slidingcache.EpochInMillis.
 	EpochUnit slidingcache.EpochUnit
@@ -74,6 +106,13 @@ type Config struct {
 	// their bucket timestamps cannot be computed without overflowing int64. It
 	// cannot be combined with a non-zero TimestampBits.
 	DisableRangeGuard bool
+	// MaxMemoryBytes is the most memory New may reserve for the window. Zero
+	// selects 1 GiB; a negative value is rejected. New estimates the memory from
+	// the other fields before allocating anything and returns an error when the
+	// estimate exceeds this cap, so a larger configuration must raise it
+	// explicitly. The estimate counts the cells and per-bucket timestamps, which
+	// dominate, and ignores the fixed overhead of a few hundred bytes per shard.
+	MaxMemoryBytes int64
 }
 
 func (c Config) validate() error {
@@ -89,6 +128,15 @@ func (c Config) validate() error {
 	if buckets := c.bucketCount(); buckets > maxBuckets {
 		return fmt.Errorf(
 			"countminsketch: WindowSize/Precision needs %d buckets, above the maximum of %d", buckets, maxBuckets,
+		)
+	}
+	if c.Shards < 0 || c.Shards > maxShards {
+		return fmt.Errorf("countminsketch: Shards must be between 0 and %d, got %d", maxShards, c.Shards)
+	}
+	if c.MaxMemoryBytes < 0 {
+		return fmt.Errorf(
+			"countminsketch: MaxMemoryBytes must be >= 0 (0 selects %d), got %d",
+			defaultMaxMemoryBytes, c.MaxMemoryBytes,
 		)
 	}
 	if !validEpochUnit(c.EpochUnit) {
@@ -176,19 +224,82 @@ func (c Config) timestampBits() int {
 	}
 }
 
+// dimensions returns the width and depth of the whole sketch, before its columns
+// are divided among the shards.
 func (c Config) dimensions() (width, depth int, err error) {
-	epsilon, delta := c.Epsilon, c.Delta
-	if epsilon == 0 {
-		epsilon = defaultEpsilon
-	}
+	delta := c.Delta
 	if delta == 0 {
 		delta = defaultDelta
 	}
-	width, depth, err = countmin.Dimensions(epsilon, delta)
+	width, depth, err = countmin.Dimensions(c.epsilon(), delta)
 	if err != nil {
 		return 0, 0, fmt.Errorf("countminsketch: invalid Epsilon %v or Delta %v: %w", c.Epsilon, c.Delta, err)
 	}
 	return width, depth, nil
+}
+
+func (c Config) epsilon() float64 {
+	if c.Epsilon == 0 {
+		return defaultEpsilon
+	}
+	return c.Epsilon
+}
+
+// layout sizes the window: Epsilon and Delta give the whole sketch, whose
+// columns are divided among the shards, each holding a ring of one slot per
+// bucket. It expects a validated Config.
+func (c Config) layout() (windowLayout, error) {
+	totalWidth, depth, err := c.dimensions()
+	if err != nil {
+		return windowLayout{}, err
+	}
+	shards, err := c.shardCount(totalWidth)
+	if err != nil {
+		return windowLayout{}, err
+	}
+	return windowLayout{
+		shards:     shards,
+		shardWidth: ceilDiv(totalWidth, shards),
+		depth:      depth,
+		buckets:    int(c.bucketCount()),
+	}, nil
+}
+
+// shardCount resolves Config.Shards to a power of two that leaves every shard at
+// least minShardWidth of the totalWidth columns, or explains why it cannot.
+func (c Config) shardCount(totalWidth int) (int, error) {
+	if c.Shards == 0 {
+		return defaultShardCount(totalWidth), nil
+	}
+	shards := roundUpPow2(c.Shards)
+	if shards > 1 && ceilDiv(totalWidth, shards) < minShardWidth {
+		return 0, fmt.Errorf(
+			"countminsketch: Epsilon %v gives %d columns, %d per shard with %d Shards, below the minimum of %d; "+
+				"use fewer Shards or a smaller Epsilon",
+			c.epsilon(), totalWidth, ceilDiv(totalWidth, shards), shards, minShardWidth,
+		)
+	}
+	return shards, nil
+}
+
+// defaultShardCount is the largest power of two up to defaultMaxShards that
+// leaves every shard minShardWidth columns, so a default never makes New fail.
+func defaultShardCount(totalWidth int) int {
+	for shards := defaultMaxShards; shards > 1; shards /= 2 {
+		if ceilDiv(totalWidth, shards) >= minShardWidth {
+			return shards
+		}
+	}
+	return 1
+}
+
+// maxMemoryBytes expects a validated Config, where MaxMemoryBytes is not
+// negative.
+func (c Config) maxMemoryBytes() uint64 {
+	if c.MaxMemoryBytes <= 0 {
+		return defaultMaxMemoryBytes
+	}
+	return uint64(c.MaxMemoryBytes)
 }
 
 // futureClock returns the clock the future guard consults, or nil when the
@@ -215,4 +326,17 @@ func unixClock(unit slidingcache.EpochUnit) func() int64 {
 	default:
 		return func() int64 { return time.Now().UnixMilli() }
 	}
+}
+
+// roundUpPow2 rounds n up to a power of two, as the root package rounds Shards.
+func roundUpPow2(n int) int {
+	if n <= 1 {
+		return 1
+	}
+	return 1 << bits.Len(uint(n-1))
+}
+
+// ceilDiv divides positive integers rounding up.
+func ceilDiv(numerator, divisor int) int {
+	return (numerator + divisor - 1) / divisor
 }
