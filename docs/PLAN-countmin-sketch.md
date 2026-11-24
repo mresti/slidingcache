@@ -29,6 +29,10 @@ Forma del rango (Fase 2):
   `bucket()` y `HW − window` desbordan int64, así que esos epochs se siguen rechazando con −1. En ms y ns
   cabe todo int64. Combinado con `TimestampBits != 0` -> error de `New`.
 
+Aceptado el 2026-11-24:
+- Tope de 2^20 buckets por ventana (`New` da error por encima).
+- Fase 3: estimación de RAM y tope configurable, para que un ε diminuto falle en `New` y no al reservar.
+
 Propuestas mías sin objeción:
 - Sin `SweepInterval` ni janitor: la RAM está acotada por construcción. `Close` queda como no-op por paridad.
 - `Stats.Saturated`: contador nuevo de incrementos perdidos por celda saturada.
@@ -153,7 +157,9 @@ func ShardOf(h uint64, bits uint) uint64                         // shard de h e
 reglas que raíz; más `Epsilon` (0 -> 0.001), `Delta` (0 -> 0.01), `TimestampBits`, `DisableRangeGuard`. Sin
 CountBits ni SweepInterval.
 `New`, `Store`, `Get`, `Close` (no-op, por paridad), `HighWater`, `Stats`, `WithHashFunc`.
-Reutiliza de raíz: interface, `LateEvent`, `FutureEvent`, `EpochUnit`.
+Reutiliza de raíz: interface, `LateEvent`, `FutureEvent`, `EpochUnit`, `HashFunc`.
+- `Shards` entra en la Fase 3: la Fase 2 tiene una sola shard y no acepta un campo que ignoraría.
+- El anillo se reserva entero: `New` devuelve error si `ceil(W/P)` > 1.048.576 buckets (2^20).
 
 Por shard: `ring []slot` (len B = ceil(W/P); slot = {timestamp, *Sketch}, alloc perezoso y reutilizado) +
 agregado + `applied` (cutoff ya aplicado).
@@ -173,8 +179,12 @@ slot + agregado += 1 en las celdas de h; Accepted++
 return min de las celdas del agregado                // O(filas)
 ```
 - `Get`: mismos chequeos, `expireTo`, lectura del agregado. No escribe celdas.
-- `expireTo`: k slots caducados -> O(k·celdas); si k > B/2 reconstruye desde los supervivientes; salto >=
-  ventana -> todo a cero. La expiración es exacta respecto al HW visto bajo lock, también si lo avanzó otra shard.
+- `expireTo`, Fase 2: recorre todos los slots y caduca (`Sub` + `Reset`) los vivos con `ts <= cutoff`. Sin
+  aritmética de distancias, así que el centinela de una cache virgen no puede desbordar. Fase 3, con medidas:
+  recorrer solo el tramo caducado, reconstruir desde los supervivientes si k > B/2, y todo a cero si el salto
+  >= ventana. La expiración es exacta respecto al HW visto bajo lock, también si lo avanzó otra shard.
+- Un slot se reinicia al caducar. Un slot vivo con otro timestamp en el índice de `ts` es un bug: los tests
+  lo detectan, el código nunca lo reetiqueta.
 - Hash por defecto `maphash.String(seed, key)` con seed por Cache: 4-5 ns, 0 allocs (`fnv1a` del repo: 9-39 ns).
 - Mutex por shard como hoy. Lock-free con atómicos = optimización posterior.
 
@@ -199,6 +209,7 @@ lecturas de Clock, regla de vida estricta, fuera de orden, rechazo tardío sin e
 | count sin tope (spill) | tope 2^32−1 por celda y bucket |
 | `Get` no muta | rota slots internamente (no observable) |
 | prune O(1) amortizado | pico de rotación en cambio de bucket / salto de HW |
+| cualquier `WindowSize/Precision` | máximo 2^20 buckets por ventana; por encima, error de `New` |
 
 Se mantiene en single-thread: `Store(k)` == `Get` previo + 1, si ese `Store` no avanza el HW ni satura una celda.
 
@@ -215,9 +226,26 @@ más. Gate: tests §8, 0 allocs, y a 2719×5 con hash precalculado no más de 1,
 - Notas para fases siguientes: cada slot tiene su propia seed, así que la cache cuenta solo con
   `Aggregate.Add` (nunca `slot.Add([]byte)`); conservative update tocará los dos bucles de filas, no solo los
   helpers; `TestErrorBound` comprueba la cota con mucho margen, la Fase 5 necesita una medida de error más fina.
-**Fase 2 — `countminsketch` correcto, 1 shard lógica.** Helpers de ventana duplicados (~80 líneas: bucket,
-floorDiv, cutoffFor, advanceHighWater, isFuture, validadores, unixClock). Anillo + agregado + `expireTo`.
-Gate: fuzz diferencial, 0 divergencias.
+**Fase 2 — `countminsketch` correcto, 1 shard lógica. HECHA (2026-11-24).** Resultado:
+- `make ci` verde en go1.26.4 y go1.27.3 (lint 0 issues, `-race`, cobertura 98,5%); vet linux/386 ok.
+- 4 targets de fuzz diferencial (exacto contra raíz, colisiones acotadas, rango ancho contra modelo, guard
+  de futuro), 30 s cada uno, 2,7M ejecuciones, 0 divergencias. Tras cada op se comparan retorno, `HighWater`,
+  contadores e invariantes I1-I3.
+- 47 mutantes elegidos a mano, incluida la conversión de unidades: 46 cazados; el superviviente es
+  equivalente por argumento, no por test (solo cambia cuál de los dos contadores internos de `Late` sube).
+  Tres huecos de tests detectados así y cerrados: límites exactos del rango a precisión 1 s y borde del
+  guard de futuro.
+- Sin cubrir: `Stats.Saturated++`, y dos ramas inalcanzables en 64 bit (error de `NewAggregate` tras
+  `Dimensions`, panic por slot de otra dimensión).
+- Pendiente para la Fase 3: un ε diminuto que `Dimensions` acepta reserva decenas de GB (el agregado al
+  construir, los slots durante la primera ventana) sin error previo; estimación de RAM y tope configurable,
+  aceptados. Los tests no se han ejecutado en 32 bit, solo vet.
+
+Alcance original: Helpers de ventana duplicados (~80 líneas: bucket,
+floorDiv, cutoffFor, advanceHighWater, isFuture, validadores, unixClock). Anillo + agregado + `expireTo`
+simple, un mutex. Sin `Config.Shards` y sin benchmarks (Fase 3). Gate: fuzz diferencial con tiempo real de
+fuzzing, 0 divergencias; `make ci` verde en los dos toolchains. `Stats.Saturated` queda con una rama sin
+cubrir: saturar una celda exige 2^32 eventos en un mismo bucket.
 **Fase 3 — shards, concurrencia, rendimiento, memoria.** Benches espejo de los actuales (`StoreManyKeys`,
 `StoreHotKeyNanos`, `GetHitManyKeys`, `ParallelStore`, `StoreSteadyState`, `StoreAdvancingHighWater`,
 `MemoryFootprint`) archivados en `benchmarks/`. Gate de corrección: fuzz diferencial con Shards > 1, test de
@@ -247,7 +275,12 @@ go1.26.4 y go1.27.3.
 
 `countminsketch` (oráculo = `slidingcache.Cache` real, sin mocks):
 - **Modo A, hash inyectado sin colisiones:** `got == want` en cada Store/Get -> la lógica de ventana es la misma.
-- **Modo B, hash por defecto y sketch estrecho:** centinelas iguales, `got >= want`.
+  La ausencia de colisiones se comprueba, no se supone: cada hash sumado una vez a un agregado debe contar 1.
+- **Modo B, hash por defecto y sketch estrecho:** centinelas iguales, `got >= want` y `got <=` suma de los
+  conteos del oráculo sobre las keys del fuzz.
+- Tras cada op se comparan también `HighWater()` y los contadores de rechazo. Las celdas de `countmin` no son
+  visibles desde la cache, así que I1 se comprueba reconstruyendo un agregado desde los slots vivos y
+  comparando `Count` por key; I2 e I3, directamente.
 - Fuzz diferencial con el esquema de `FuzzStoreGetInvariants` y `FuzzFutureSkewInvariants` (4 keys, offsets
   que cruzan la ventana, extremos del rango en cada `TimestampBits`, reloj falso). I1 tras cada op (white-box).
 - Rango: 39..55 contra raíz; 56..62 y guard desactivado contra modelo ingenuo; epochs en los extremos de
@@ -291,6 +324,9 @@ go1.26.4 y go1.27.3.
     leía el export data v5 de la stdlib 1.27. Subido a v2.15.0 en `tools/go.mod` (`go 1.26.0` mínimo, CI no
     cambia): 0 issues en raíz con go1.27.3 y con go1.26.4. En `.golangci.yml`, `gofumpt.extra-rules` (obsoleto
     en 2.15) pasa a `extra` con las tres reglas que ya activaba.
+
+12. `isFuture` suma `bucket(clock()) + skew` sin guardar el desbordamiento: un `Clock` que devuelva un valor
+    cercano a MaxInt64 lo hace negativo y rechaza todo como futuro. Está en raíz y replicado en `countminsketch`.
 
 ## 11. Preguntas abiertas
 
