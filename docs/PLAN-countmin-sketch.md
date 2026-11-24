@@ -36,7 +36,7 @@ Aceptado el 2026-11-24:
 - Ancho mínimo por shard: 8 columnas. Tope de RAM: `Config.MaxMemoryBytes`, 1 GiB por defecto. La
   estimación no se exporta: solo sale en el mensaje de error.
 - Objetivo de rendimiento re-alcanzado: `Store` <= 3× el exacto desde ~110 eventos por bucket en toda la
-  cache; más lento por debajo (§7, Fase 3).
+  cache (~120 desde la Fase 5); más lento por debajo (§7, Fases 3 y 5).
 - `BenchmarkStoreDensity` se queda; `internal/window` no se extrae por ahora; Fase 5 aprobada.
 - Fase 5: conservative update siempre activo; gate de precisión re-alcanzado por densidad; `Ring.Add` a 12,5 ns.
 
@@ -72,7 +72,7 @@ Caducar un bucket: dependencia = `New` = 3,1 µs y 57 KB (2 allocs); prototipo =
 | Expiración | sin `Reset` ni resta: 57 KB nuevos por bucket y shard | resta al agregado y reutiliza, 0 allocs |
 | Decisiones §1 | choca con 4: sin `error` en `New`, sin `AddHash`, sin agregado uint64, sin tamaño por (ancho, filas) | las cumple |
 | Hash | seed pública fija: colisiones fabricables (lo avisa su README) | `maphash` con seed por Cache |
-| Precisión a igual RAM | mejor (~2×, conservative update) | clásico en MVP; CU opcional después (Q3) |
+| Precisión a igual RAM | mejor (~2×, conservative update) | clásico en MVP; conservative update por slot desde la Fase 5, siempre activo |
 | Código a mantener | ~0 | ~200 líneas + tests |
 | Madurez | bien testeada, pero 3 semanas de vida y v0.x | la que le demos; riesgo en el hashing |
 | Dependencias del módulo | rompe "zero external dependencies" | ninguna |
@@ -164,7 +164,7 @@ func (s *Sketch) Reset()
 
 func NewRing(width, depth, slots int) (*Ring, error)            // slots uint32 en un array + agregado uint64
 func (r *Ring) Slots() int
-func (r *Ring) Add(slot int, h uint64) (estimate uint64, saturated bool) // slot+agregado, una pasada
+func (r *Ring) Add(slot int, h uint64) (estimate uint64, saturated bool) // conservative update en el slot, reflejado en el agregado
 func (r *Ring) Count(h uint64) uint64                           // estimación del agregado
 func (r *Ring) Expire(slot int)                                 // agregado -= slot; slot a cero
 func (r *Ring) Reset()
@@ -243,7 +243,7 @@ lecturas de Clock, regla de vida estricta, fuera de orden, rechazo tardío sin e
 | dos `Store` seguidos de una key devuelven conteos consecutivos | pueden devolver el mismo conteo (Fase 5; solo con colisiones) |
 | `Get` no muta | rota slots internamente (no observable) |
 | prune O(1) amortizado | cada cambio de bucket caduca un slot por shard (~340 ns); un salto de HW, uno por bucket saltado |
-| `Store` ~34 ns con cualquier densidad | más rápido que el exacto desde ~450 eventos por bucket; 3× a ~110; 22× con 1 |
+| `Store` ~34 ns con cualquier densidad | más rápido que el exacto desde ~550 eventos por bucket; 3× a ~120; 22× con 1 (Fase 5; antes ~450 y ~110) |
 | cualquier `WindowSize/Precision` | máximo 2^20 buckets por ventana; por encima, error de `New` |
 
 Se mantiene en single-thread: `Store(k)` == `Get` previo + 1, si ese `Store` no avanza el HW ni satura una celda.
@@ -486,7 +486,7 @@ go1.26.4 y go1.27.3.
   y 559 µs por una ventana entera de 1800 slots (16 shards, ε por defecto), una vez por shard. Con
   `Shards: 1` el mismo salto recorre el anillo entero bajo el único lock.
 - Tráfico disperso: con pocos eventos por bucket el coste de caducar domina (22× el exacto con 1 evento
-  por bucket, 3× con ~110, igual con ~450; ε por defecto). El umbral crece como 1/ε.
+  por bucket, 3× con ~120, igual con ~550; ε por defecto, tras la Fase 5). El umbral crece como 1/ε.
 - Primer `expireTo` de una cache virgen: la distancia al centinela desborda si se resta sin saturar.
 - Saturación de celda (Precision grande + key muy caliente): el conteo se queda corto; contarlo en Stats.
 - Cambiar ε/δ exige cache nueva. `New` reserva toda la ventana; después no se aloca nada.

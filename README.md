@@ -706,8 +706,9 @@ events of all keys together:
 | 1,000 | 62 ns | 40 ns |
 | 10,000 | 70 ns | 32 ns |
 
-The sketch is within 3× of the exact cache from about 120 events per bucket and
-faster from about 550. An expiry clears `width × depth` counters, so those
+The 1,000 row is the workload of `StoreDense` above; the exact cache reads 59
+to 62 ns on it from run to run. The sketch is within 3× of the exact cache from
+about 120 events per bucket and faster from about 550. An expiry clears `width × depth` counters, so those
 thresholds move with `1 / Epsilon`.
 
 A jump of the high-water mark expires one slot per bucket skipped, at most the
