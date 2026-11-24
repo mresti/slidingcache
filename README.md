@@ -690,13 +690,13 @@ events of all keys together:
 
 | Events per bucket | Exact | `countminsketch` |
 |---|---|---|
-| 1 | 34 ns | 745 ns |
-| 10 | 34 ns | 462 ns |
-| 30 | 36 ns | 275 ns |
-| 100 | 37 ns | 120 ns |
-| 300 | 43 ns | 57 ns |
-| 1,000 | 59 ns | 35 ns |
-| 10,000 | 69 ns | 27 ns |
+| 1 | 34 ns | 757 ns |
+| 10 | 34 ns | 466 ns |
+| 30 | 36 ns | 277 ns |
+| 100 | 36 ns | 121 ns |
+| 300 | 43 ns | 56 ns |
+| 1,000 | 58 ns | 35 ns |
+| 10,000 | 70 ns | 27 ns |
 
 The sketch is within 3× of the exact cache from about 110 events per bucket and
 faster from about 450. An expiry clears `width × depth` counters, so those

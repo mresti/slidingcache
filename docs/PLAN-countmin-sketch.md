@@ -37,6 +37,7 @@ Aceptado el 2026-11-24:
   estimación no se exporta: solo sale en el mensaje de error.
 - Objetivo de rendimiento re-alcanzado: `Store` <= 3× el exacto desde ~110 eventos por bucket en toda la
   cache; más lento por debajo (§7, Fase 3).
+- `BenchmarkStoreDensity` se queda; `internal/window` no se extrae por ahora; Fase 5 aprobada.
 
 Propuestas mías sin objeción:
 - Sin `SweepInterval` ni janitor: la RAM está acotada por construcción. `Close` queda como no-op por paridad.
@@ -356,12 +357,13 @@ anterior al paso 4, mediana de 5):
   Ejecutados con `PKG`: `test-fuzz`, `test-fuzz-one`, `test-fuzz-all` y `test-bench`. `test-bench-save` y
   `test-bench-stat` con `PKG`, solo `make -n`. `-fuzz` admite un único paquete.
 - `BenchmarkStoreDensity`: el barrido de densidad de la Fase 3 pasa a ser un benchmark del repo. Mediana de
-  10, exacto / sketch en ns: 1 evento por bucket 34 / 745; 10: 34 / 462; 30: 36 / 275; 100: 37 / 120; 300:
-  43 / 57; 1000: 59 / 35; 10.000: 69 / 27. Mismo resultado que el barrido a mano: 3× a ~110 eventos por
-  bucket, igualdad a ~450. **Pendiente:** archivarlo en `benchmarks/` tras el commit.
+  10, exacto / sketch en ns: 1 evento por bucket 34 / 757; 10: 34 / 466; 30: 36 / 277; 100: 36 / 121; 300:
+  43 / 56; 1000: 58 / 35; 10.000: 70 / 27. Mismo resultado que el barrido a mano: 3× a ~110 eventos por
+  bucket, igualdad a ~450. Archivado en `benchmarks/countminsketch-phase4-density.txt` (commit 36f5516).
 - `make ci` verde en go1.26.4 y go1.27.3 (cobertura 100% raíz, 98,6% y 98,2%). Fusión simulada con las PR
   #17 y #18: sin conflictos en `README.md`, `benchmarks/README.md` ni `slidingcache.go`.
-- No hecho: `internal/window` (opcional; es un refactor de raíz con gate del 3%), a decidir.
+- No hecho: `internal/window` (opcional; es un refactor de raíz con gate del 3%). Descartado por ahora
+  (decisión del 2026-11-24); la deuda 5 sigue abierta.
 **Fase 5 — conservative update (después del MVP).** Solo sube las celdas por debajo del nuevo mínimo del
 slot y refleja el mismo delta en el agregado (I1 se mantiene). Gate: nunca subestima, error medio <= 0,6× el
 clásico en uniforme y Zipf, modo A sigue exacto. Coste asumido: `Store` deja de subir siempre +1.
@@ -445,7 +447,4 @@ go1.26.4 y go1.27.3.
 
 ## 11. Preguntas abiertas
 
-1. ¿Extraer `internal/window` (deuda 5)? Refactor de raíz, gate 3%.
-2. ¿Fase 5 (conservative update)?
-
-Pendiente de dato externo: el umbral real del consumidor, que la librería no recoge (§4).
+Ninguna. Pendiente de dato externo: el umbral real del consumidor, que la librería no recoge (§4).
