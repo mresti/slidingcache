@@ -35,84 +35,81 @@ func FuzzSketchAgainstExactCounts(f *testing.F) {
 	})
 }
 
-// fuzzRing is a sliding window in miniature: a ring of slots, an aggregate over
-// all of them, and the exact count of every key in every slot.
-type fuzzRing struct {
-	agg     *Aggregate
-	slots   []*Sketch
+// fuzzWindow is a sliding window in miniature: a ring of slots and the exact
+// count of every key in every slot.
+type fuzzWindow struct {
+	ring    *Ring
 	exact   []map[uint64]uint64
 	current int
 }
 
-const fuzzRingSlots = 4
+const fuzzWindowSlots = 4
 
-func newFuzzRing(t *testing.T) *fuzzRing {
-	r := &fuzzRing{agg: mustAggregate(t, 8, 3)}
-	for range fuzzRingSlots {
-		r.slots = append(r.slots, r.agg.NewSlot())
-		r.exact = append(r.exact, make(map[uint64]uint64))
+func newFuzzWindow(t *testing.T) *fuzzWindow {
+	w := &fuzzWindow{ring: mustRing(t, 8, 3, fuzzWindowSlots)}
+	for range fuzzWindowSlots {
+		w.exact = append(w.exact, make(map[uint64]uint64))
 	}
-	return r
+	return w
 }
 
-func (r *fuzzRing) add(h uint64) {
-	r.agg.Add(r.slots[r.current], h)
-	r.exact[r.current][h]++
+func (w *fuzzWindow) add(h uint64) {
+	w.ring.Add(w.current, h)
+	w.exact[w.current][h]++
 }
 
 // expire advances to the next slot, dropping the oldest one from the window.
-func (r *fuzzRing) expire(t *testing.T) {
-	r.current = (r.current + 1) % fuzzRingSlots
-	if err := r.agg.Sub(r.slots[r.current]); err != nil {
-		t.Fatal(err)
-	}
-	r.slots[r.current].Reset()
-	clear(r.exact[r.current])
+func (w *fuzzWindow) expire() {
+	w.current = (w.current + 1) % fuzzWindowSlots
+	w.ring.Expire(w.current)
+	clear(w.exact[w.current])
 }
 
-func (r *fuzzRing) rebuild(t *testing.T) {
-	r.agg.Reset()
-	for _, slot := range r.slots {
-		if err := r.agg.AddSketch(slot); err != nil {
-			t.Fatal(err)
-		}
+func (w *fuzzWindow) reset() {
+	w.ring.Reset()
+	for _, counts := range w.exact {
+		clear(counts)
 	}
 }
 
-func (r *fuzzRing) assertCountsCoverLiveEvents(t *testing.T) {
+// assertCountsBoundLiveEvents checks the count-min guarantee against the exact
+// model: no estimate below a key's live events, none above all live events.
+func (w *fuzzWindow) assertCountsBoundLiveEvents(t *testing.T) {
 	t.Helper()
 	live := make(map[uint64]uint64)
-	for _, counts := range r.exact {
+	var total uint64
+	for _, counts := range w.exact {
 		for h, c := range counts {
 			live[h] += c
+			total += c
 		}
 	}
 	for h, want := range live {
-		if got := r.agg.Count(h); got < want {
-			t.Fatalf("Count = %d below the %d live events", got, want)
+		if got := w.ring.Count(h); got < want || got > total {
+			t.Fatalf("Count = %d, want between the %d live events of the key and the %d of all keys", got, want, total)
 		}
 	}
 }
 
-// FuzzAggregateWindow drives a ring of slots through adds, expiries and rebuilds.
-// The top two bits of each byte choose the operation and the low four the key.
-func FuzzAggregateWindow(f *testing.F) {
+// FuzzRingWindow drives a ring of slots through adds, expiries and resets. The
+// top two bits of each byte choose the operation and the low four the key.
+func FuzzRingWindow(f *testing.F) {
 	f.Add([]byte{0x01, 0x02, 0x80, 0x03, 0xc0, 0x01})
 	f.Add([]byte{0x00, 0x00, 0x00, 0x80, 0x80, 0x80, 0x80, 0x00})
 	f.Add([]byte{0x05, 0x45, 0x85, 0xc5, 0x05, 0x45, 0x80, 0x80})
 	f.Fuzz(func(t *testing.T, ops []byte) {
-		r := newFuzzRing(t)
+		w := newFuzzWindow(t)
 		for _, op := range ops {
 			switch op >> 6 {
 			case 0, 1:
-				r.add(splitmix64(uint64(op & 0x0f)))
+				w.add(splitmix64(uint64(op & 0x0f)))
 			case 2:
-				r.expire(t)
+				w.expire()
 			default:
-				r.rebuild(t)
+				w.reset()
 			}
-			assertAggregateIsSumOfSlots(t, r.agg, r.slots)
-			r.assertCountsCoverLiveEvents(t)
+			assertAggregateIsSumOfSlots(t, w.ring)
+			w.assertCountsBoundLiveEvents(t)
 		}
 	})
 }

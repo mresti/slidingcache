@@ -49,8 +49,8 @@ func isOpenUnitInterval(x float64) bool {
 	return x > 0 && x < 1
 }
 
-// shape holds validated dimensions. A slot and its aggregate share one, and
-// comparing two shapes is how a mismatched slot is caught.
+// shape holds validated dimensions, shared by a sketch and by every slot of a
+// ring and its aggregate.
 type shape struct {
 	width uint64
 	depth int

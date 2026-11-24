@@ -42,19 +42,20 @@ type harness struct {
 // comparison decides whether a sketch return agrees with the reference's.
 type comparison func(h *harness, c call, got, want int)
 
-// newExactHarness is Mode A: a collision-free injected hash, proven so for
-// cfg's dimensions, under which every return, the high-water mark and the
-// counters must equal the reference's.
+// newExactHarness is Mode A: a collision-free injected hash, proven so for the
+// dimensions of cfg's shards, under which every return, the high-water mark
+// and the counters must equal the reference's.
 func newExactHarness(t *testing.T, cfg Config, ref reference) *harness {
 	t.Helper()
-	hashes := exactHashes()
-	requireCollisionFree(t, cfg, hashes)
+	requireCollisionFree(t, cfg, exactHashes())
+	sketch := newTestCache(t, cfg, WithHashFunc(exactHash))
+	requireShardsSharedAndSpanned(t, sketch)
 	return &harness{
 		t:       t,
-		sketch:  newTestCache(t, cfg, WithHashFunc(exactHash)),
+		sketch:  sketch,
 		ref:     ref,
 		compare: requireExact,
-		window:  newWindowChecker(t, cfg, hashes),
+		window:  newWindowChecker(),
 	}
 }
 
@@ -63,17 +64,14 @@ func newExactHarness(t *testing.T, cfg Config, ref reference) *harness {
 func newBoundedHarness(t *testing.T, cfg Config) *harness {
 	t.Helper()
 	sketch := newTestCache(t, cfg)
-	hashes := make([]uint64, len(testKeys))
-	for i, key := range testKeys {
-		hashes[i] = sketch.hashOf(key)
-	}
+	reseedUntilShardsSharedAndSpanned(t, sketch)
 	return &harness{
 		t:       t,
 		sketch:  sketch,
 		ref:     newOracle(t, oracleConfig(t, cfg)),
 		compare: requireBounded,
 		bound:   newReferenceModel(cfg),
-		window:  newWindowChecker(t, cfg, hashes),
+		window:  newWindowChecker(),
 	}
 }
 
@@ -85,7 +83,7 @@ func (h *harness) store(epoch int64, key string) int {
 	}
 	got := h.sketch.Store(epoch, key)
 	h.compare(h, call{"Store", epoch, key}, got, want)
-	h.window.require(h.t, h.sketch)
+	h.requireWindows(key, got, 1)
 	return got
 }
 
@@ -97,8 +95,20 @@ func (h *harness) get(epoch int64, key string) int {
 	}
 	got := h.sketch.Get(epoch, key)
 	h.compare(h, call{"Get", epoch, key}, got, want)
-	h.window.require(h.t, h.sketch)
+	h.requireWindows(key, got, 0)
 	return got
+}
+
+// requireWindows checks the invariants of every shard, and when the operation
+// on key returned a count, at least lowestCount, so it reached the lock, that
+// its shard caught up.
+func (h *harness) requireWindows(key string, got, lowestCount int) {
+	h.t.Helper()
+	if got >= lowestCount {
+		h.window.requireReached(h.t, h.sketch, key)
+		return
+	}
+	h.window.require(h.t, h.sketch)
 }
 
 // requireBoundAgrees validates the model that supplies Mode B's upper bound

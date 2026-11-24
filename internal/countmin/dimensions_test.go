@@ -88,8 +88,8 @@ func TestSizedConstructorsValidateDimensions(t *testing.T) {
 		if _, err := NewSized(sz.width, sz.depth); err == nil {
 			t.Errorf("NewSized(%d, %d) succeeded, want an error", sz.width, sz.depth)
 		}
-		if _, err := NewAggregate(sz.width, sz.depth); err == nil {
-			t.Errorf("NewAggregate(%d, %d) succeeded, want an error", sz.width, sz.depth)
+		if _, err := NewRing(sz.width, sz.depth, 1); err == nil {
+			t.Errorf("NewRing(%d, %d, 1) succeeded, want an error", sz.width, sz.depth)
 		}
 	}
 	for _, sz := range []size{{1, 1}, {7, MaxDepth}, {2719, 5}} {
@@ -97,13 +97,14 @@ func TestSizedConstructorsValidateDimensions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewSized(%d, %d): %v", sz.width, sz.depth, err)
 		}
-		a, err := NewAggregate(sz.width, sz.depth)
+		r, err := NewRing(sz.width, sz.depth, 3)
 		if err != nil {
-			t.Fatalf("NewAggregate(%d, %d): %v", sz.width, sz.depth, err)
+			t.Fatalf("NewRing(%d, %d, 3): %v", sz.width, sz.depth, err)
 		}
-		if len(s.cells) != sz.width*sz.depth || len(a.cells) != sz.width*sz.depth {
-			t.Fatalf("%d x %d gave %d sketch and %d aggregate cells, want exactly %d",
-				sz.width, sz.depth, len(s.cells), len(a.cells), sz.width*sz.depth)
+		if len(s.cells) != sz.width*sz.depth || len(r.agg) != sz.width*sz.depth || len(r.slots) != 3*sz.width*sz.depth {
+			t.Fatalf("%d x %d gave %d sketch, %d aggregate and %d ring cells, want %d, %d and 3 x %d",
+				sz.width, sz.depth, len(s.cells), len(r.agg), len(r.slots),
+				sz.width*sz.depth, sz.width*sz.depth, sz.width*sz.depth)
 		}
 	}
 }

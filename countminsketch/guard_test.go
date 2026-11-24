@@ -61,13 +61,45 @@ func TestHighWaterCompareAndSwapRetriesAfterALostRace(t *testing.T) {
 	requireReturn(t, "event of the winning Store", c.Get(2_000, testKeys[1]), 1)
 }
 
+// TestStoreAtTheHighWaterBucketSkipsTheGuard stores again in the bucket that
+// is the mark after the clock went back far enough to call that bucket future:
+// only a bucket beyond the mark is checked, so the Store is accepted without
+// reading the clock, as in the root package.
+func TestStoreAtTheHighWaterBucketSkipsTheGuard(t *testing.T) {
+	forEachShardCount(t, func(t *testing.T, shards int) {
+		const now, skew = 1_000_000, 30
+		sketchClock, oracleClock := &fakeClock{now: now}, &fakeClock{now: now}
+		cfg := shardedSecondsConfig(0, shards)
+		cfg.MaxFutureSkew = skew * time.Second
+		cfg.Clock = oracleClock.read
+		oracle := newOracle(t, oracleConfig(t, cfg))
+		cfg.Clock = sketchClock.read
+		h := newExactHarness(t, cfg, oracle)
+		requireReads := func(what string, want int) {
+			t.Helper()
+			if sketchClock.reads != want || oracleClock.reads != want {
+				t.Fatalf("%s: clock read %d times by the sketch, %d by the oracle, want %d",
+					what, sketchClock.reads, oracleClock.reads, want)
+			}
+		}
+
+		requireReturn(t, "first Store, advancing the mark", h.store(now, testKeys[0]), 1)
+		requireReads("after the first Store", 1)
+
+		sketchClock.now, oracleClock.now = now-skew-h.sketch.precision, now-skew-h.sketch.precision
+		requireReturn(t, "Store again at the mark", h.store(now, testKeys[0]), 2)
+		requireReads("after the Store at the mark", 1)
+	})
+}
+
 // TestLiveSlotIsNeverRetagged breaks I2 on purpose, which the code cannot do on
 // its own, to show that a bucket landing on a slot still live for another
 // bucket stops the cache instead of folding the two together.
 func TestLiveSlotIsNeverRetagged(t *testing.T) {
 	c := newTestCache(t, secondsConfig(0), WithHashFunc(exactHash))
 	c.Store(100, testKeys[0])
-	buckets := int64(len(c.window.slots))
+	w := &c.shardOf(testKeys[0]).window
+	buckets := int64(w.ring.Slots())
 
 	defer func() {
 		message, _ := recover().(string)
@@ -75,6 +107,6 @@ func TestLiveSlotIsNeverRetagged(t *testing.T) {
 			t.Fatalf("recovered %q, want the live-slot panic", message)
 		}
 	}()
-	c.window.record(100+buckets*c.precision, exactHash(testKeys[0]))
+	w.record(100+buckets*c.precision, exactHash(testKeys[0]))
 	t.Fatal("record into a slot live for another bucket did not panic")
 }

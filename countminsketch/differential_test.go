@@ -1,6 +1,7 @@
 package countminsketch
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -30,6 +31,21 @@ func fuzzOperand(base int64, op byte, precision int64) (string, int64) {
 
 func foldOracleBits(b byte) int {
 	return minTimestampBits + int(b)%oracleBits
+}
+
+// fuzzShardCounts are the Config.Shards a fuzzed byte selects among.
+var fuzzShardCounts = [...]int{1, 2, 4}
+
+func foldShards(b byte) int {
+	return fuzzShardCounts[int(b)%len(fuzzShardCounts)]
+}
+
+// addForEveryShardCount adds a seed once per entry of fuzzShardCounts, so even
+// the seed corpus that make ci runs covers every shard count.
+func addForEveryShardCount(f *testing.F, seed func(shards byte) []any) {
+	for i := range byte(len(fuzzShardCounts)) {
+		f.Add(seed(i)...)
+	}
 }
 
 type rangeSeed struct {
@@ -84,30 +100,53 @@ func replayRangeOps(h *harness, bits int, base int64, ops []byte) {
 
 // FuzzExactAgreesWithOracle is Mode A: with a collision-free hash every return,
 // the high-water mark and the counters must equal root's, at every
-// TimestampBits root has an equivalent for.
+// TimestampBits root has an equivalent for and with 1, 2 or 4 shards.
 func FuzzExactAgreesWithOracle(f *testing.F) {
 	for _, s := range rangeSeeds() {
-		f.Add(s.base, byte(s.bits-minTimestampBits), s.ops)
+		addForEveryShardCount(f, func(shards byte) []any {
+			return []any{s.base, byte(s.bits - minTimestampBits), shards, s.ops}
+		})
 	}
-	f.Fuzz(func(t *testing.T, base int64, bits byte, ops []byte) {
-		cfg := secondsConfig(foldOracleBits(bits))
+	f.Fuzz(func(t *testing.T, base int64, bits, shards byte, ops []byte) {
+		cfg := shardedSecondsConfig(foldOracleBits(bits), foldShards(shards))
 		h := newExactHarness(t, cfg, newOracle(t, oracleConfig(t, cfg)))
 		replayRangeOps(h, cfg.timestampBits(), base, ops)
 	})
 }
 
-// FuzzCollisionsBoundedByOracle is Mode B: a sketch of 4 columns by 1 row with
-// the default hash, where collisions are the rule. Rejections must still be
-// identical and every count between root's and the window's total.
+// FuzzCollisionsBoundedByOracle is Mode B: the narrowest sketch New accepts,
+// with one row and the default hash, so collisions are frequent: the rule with
+// one shard of 4 columns, common with 8 columns per shard. Rejections must
+// still be identical and every count between root's and the window's total.
 func FuzzCollisionsBoundedByOracle(f *testing.F) {
 	for _, s := range rangeSeeds() {
-		f.Add(s.base, byte(s.bits-minTimestampBits), s.ops)
+		addForEveryShardCount(f, func(shards byte) []any {
+			return []any{s.base, byte(s.bits - minTimestampBits), shards, s.ops}
+		})
 	}
-	f.Fuzz(func(t *testing.T, base int64, bits byte, ops []byte) {
-		cfg := secondsConfig(foldOracleBits(bits))
-		cfg.Epsilon, cfg.Delta = 0.9, 0.9
+	f.Fuzz(func(t *testing.T, base int64, bits, shards byte, ops []byte) {
+		cfg := narrowestConfig(t, foldOracleBits(bits), foldShards(shards))
 		replayRangeOps(newBoundedHarness(t, cfg), cfg.timestampBits(), base, ops)
 	})
+}
+
+// narrowestConfig is a sketch of one row and as few columns as New allows: 4
+// with one shard, minShardWidth per shard with more.
+func narrowestConfig(t *testing.T, timestampBits, shards int) Config {
+	t.Helper()
+	cfg := shardedSecondsConfig(timestampBits, shards)
+	cfg.Epsilon, cfg.Delta = 0.9, 0.9
+	wantWidth := 4
+	if shards > 1 {
+		// Just under e/Epsilon = minShardWidth*shards, so the ceiling lands on it.
+		cfg.Epsilon = math.E / (float64(minShardWidth*shards) - 0.5)
+		wantWidth = minShardWidth
+	}
+	if layout := mustLayout(t, cfg); layout.shardWidth != wantWidth || layout.depth != 1 {
+		t.Fatalf("narrowest config with %d shards is %dx%d per shard, want %dx1",
+			shards, layout.shardWidth, layout.depth, wantWidth)
+	}
+	return cfg
 }
 
 // wideBits are the ranges root cannot express, 56..62, plus the disabled guard,
@@ -115,13 +154,17 @@ func FuzzCollisionsBoundedByOracle(f *testing.F) {
 const wideBits = maxTimestampBits - 56 + 2
 
 func wideConfig(b byte) Config {
+	return wideShardedConfig(b, 0)
+}
+
+func wideShardedConfig(b byte, shards int) Config {
 	bits := 56 + int(b)%wideBits
 	if bits > maxTimestampBits {
-		cfg := secondsConfig(0)
+		cfg := shardedSecondsConfig(0, shards)
 		cfg.DisableRangeGuard = true
 		return cfg
 	}
-	return secondsConfig(bits)
+	return shardedSecondsConfig(bits, shards)
 }
 
 // FuzzWideRangeAgreesWithModel is Mode A beyond root's ranges, against the
@@ -130,12 +173,12 @@ func FuzzWideRangeAgreesWithModel(f *testing.F) {
 	ops := [][]byte{{248, 128, 0, 252, 8, 244}, {0, 8, 128, 248, 4, 252}, {128, 128, 120, 136, 128, 144}}
 	for b := range byte(wideBits) {
 		bits := wideConfig(b).timestampBits()
-		f.Add(int64(1)<<uint(bits)-1, b, ops[0])
-		f.Add(-int64(1)<<uint(bits)+1, b, ops[1])
-		f.Add(int64(1_700_000_000), b, ops[2])
+		addForEveryShardCount(f, func(shards byte) []any { return []any{int64(1)<<uint(bits) - 1, b, shards, ops[0]} })
+		addForEveryShardCount(f, func(shards byte) []any { return []any{-int64(1)<<uint(bits) + 1, b, shards, ops[1]} })
+		addForEveryShardCount(f, func(shards byte) []any { return []any{int64(1_700_000_000), b, shards, ops[2]} })
 	}
-	f.Fuzz(func(t *testing.T, base int64, bits byte, ops []byte) {
-		cfg := wideConfig(bits)
+	f.Fuzz(func(t *testing.T, base int64, bits, shards byte, ops []byte) {
+		cfg := wideShardedConfig(bits, foldShards(shards))
 		h := newExactHarness(t, cfg, newReferenceModel(cfg))
 		replayRangeOps(h, cfg.timestampBits(), base, ops)
 	})
@@ -166,16 +209,20 @@ func FuzzFutureSkewAgreesWithOracle(f *testing.F) {
 		// past it. Then the same pair for Get, before and after moving the clock
 		// a bucket so the boundary lies above the mark.
 		{1_700_000_000, []byte{35, 36, 64 | 35, 64 | 36, 128 | 1, 64 | 35, 64 | 36}},
+		// Two Stores in the bucket that is the mark: the second is not beyond it,
+		// so neither cache may read the clock for it. The encoding only moves
+		// the clock forward, so the clock read is what tells them apart.
+		{1_700_000_000, []byte{35, 35, 32, 35}},
 	}
 	for _, seed := range seeds {
-		f.Add(seed.base, seed.ops)
+		addForEveryShardCount(f, func(shards byte) []any { return []any{seed.base, shards, seed.ops} })
 	}
-	f.Fuzz(func(t *testing.T, base int64, ops []byte) {
-		requireFutureGuardAgreement(t, base, ops)
+	f.Fuzz(func(t *testing.T, base int64, shards byte, ops []byte) {
+		requireFutureGuardAgreement(t, base, foldShards(shards), ops)
 	})
 }
 
-func requireFutureGuardAgreement(t *testing.T, base int64, ops []byte) {
+func requireFutureGuardAgreement(t *testing.T, base int64, shards int, ops []byte) {
 	t.Helper()
 	const (
 		skewSeconds = 30
@@ -187,7 +234,7 @@ func requireFutureGuardAgreement(t *testing.T, base int64, ops []byte) {
 	}
 
 	sketchClock, oracleClock := &fakeClock{now: base}, &fakeClock{now: base}
-	cfg := secondsConfig(0)
+	cfg := shardedSecondsConfig(0, shards)
 	cfg.MaxFutureSkew = skewSeconds * time.Second
 	cfg.Clock = oracleClock.read
 	oracle := newOracle(t, oracleConfig(t, cfg))

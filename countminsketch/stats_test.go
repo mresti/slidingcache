@@ -2,6 +2,7 @@ package countminsketch
 
 import (
 	"math"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -169,11 +170,7 @@ func TestConcurrentStoreAndGet(t *testing.T) {
 	if hw, _ := c.HighWater(); hw != largestAccepted.Load() {
 		t.Fatalf("HighWater() = %d, the largest accepted timestamp is %d", hw, largestAccepted.Load())
 	}
-	hashes := make([]uint64, len(testKeys))
-	for i, key := range testKeys {
-		hashes[i] = c.hashOf(key)
-	}
-	newWindowChecker(t, cfg, hashes).require(t, c)
+	newWindowChecker().require(t, c)
 }
 
 func raiseTo(highest *atomic.Int64, value int64) {
@@ -184,15 +181,14 @@ func raiseTo(highest *atomic.Int64, value int64) {
 	}
 }
 
-// TestSteadyStateDoesNotAllocate warms the ring until every slot owns a
-// sketch, after which neither accepting, advancing, expiring nor rejecting may
-// allocate.
+// TestSteadyStateDoesNotAllocate turns the ring twice, after which neither
+// accepting, advancing, expiring nor rejecting may allocate.
 func TestSteadyStateDoesNotAllocate(t *testing.T) {
 	clock := &fakeClock{now: 0}
 	cfg := secondsConfig(0)
 	cfg.MaxFutureSkew, cfg.Clock = time.Hour, clock.read
 	c := newTestCache(t, cfg)
-	buckets := int64(len(c.window.slots))
+	buckets := int64(c.shards[0].window.ring.Slots())
 	epoch := int64(0)
 	for ; epoch < 2*buckets*c.precision; epoch += c.precision {
 		c.Store(epoch, testKeys[0])
@@ -221,4 +217,52 @@ func TestSteadyStateDoesNotAllocate(t *testing.T) {
 			t.Errorf("%s allocates %v times per call, want 0", name, allocs)
 		}
 	}
+}
+
+// TestFreshCacheDoesNotAllocate checks that New reserves the whole ring: the
+// very first Store and Get, and the first use of every other slot, allocate
+// nothing. testing.AllocsPerRun discards a warm-up call, so the first calls
+// are counted exactly with mallocsDuring.
+func TestFreshCacheDoesNotAllocate(t *testing.T) {
+	c := newTestCache(t, secondsConfig(0))
+	buckets := int64(c.shards[0].window.ring.Slots())
+	firstCalls := []struct {
+		name string
+		op   func()
+	}{
+		{"first Get", func() { c.Get(0, testKeys[0]) }},
+		{"first Store", func() { c.Store(0, testKeys[0]) }},
+		{"first Store into every other slot", func() {
+			for epoch := c.precision; epoch < buckets*c.precision; epoch += c.precision {
+				c.Store(epoch, testKeys[1])
+			}
+		}},
+	}
+	for _, call := range firstCalls {
+		if mallocs := mallocsDuring(call.op); mallocs != 0 {
+			t.Errorf("%s allocates %d times, want 0", call.name, mallocs)
+		}
+	}
+
+	fresh := map[string]func(c *Cache) func(){
+		"Store": func(c *Cache) func() { return func() { c.Store(0, testKeys[0]) } },
+		"Get":   func(c *Cache) func() { return func() { c.Get(0, testKeys[0]) } },
+	}
+	for name, op := range fresh {
+		if allocs := testing.AllocsPerRun(100, op(newTestCache(t, secondsConfig(0)))); allocs != 0 {
+			t.Errorf("%s on a fresh cache allocates %v times per call, want 0", name, allocs)
+		}
+	}
+}
+
+// mallocsDuring returns the exact number of heap allocations f makes, on one
+// processor so that no other goroutine's allocations are counted, as
+// testing.AllocsPerRun does.
+func mallocsDuring(f func()) uint64 {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	f()
+	runtime.ReadMemStats(&after)
+	return after.Mallocs - before.Mallocs
 }

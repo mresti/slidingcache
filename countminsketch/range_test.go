@@ -21,22 +21,25 @@ func rangeConfigs() map[string]Config {
 // TestRangeBoundsAgreeWithModel walks each range across both of its ends, where
 // one step accepts and the next rejects, against the naive model.
 func TestRangeBoundsAgreeWithModel(t *testing.T) {
-	for name, cfg := range rangeConfigs() {
-		t.Run(name, func(t *testing.T) {
-			bits := uint(cfg.timestampBits())
-			low := newExactHarness(t, cfg, newReferenceModel(cfg))
-			for epoch := -int64(1)<<bits - 30; epoch <= -int64(1)<<bits+30; epoch += 3 {
-				low.store(epoch, testKeys[int(epoch&3)])
-				low.get(epoch, testKeys[0])
-			}
-			high := newExactHarness(t, cfg, newReferenceModel(cfg))
-			for epoch := int64(1)<<bits - 30; epoch <= int64(1)<<bits+30; epoch += 3 {
-				high.store(epoch, testKeys[int(epoch&3)])
-				high.get(epoch, testKeys[0])
-			}
-			high.requireFinalCounts()
-		})
-	}
+	forEachShardCount(t, func(t *testing.T, shards int) {
+		for name, cfg := range rangeConfigs() {
+			cfg.Shards = shards
+			t.Run(name, func(t *testing.T) {
+				bits := uint(cfg.timestampBits())
+				low := newExactHarness(t, cfg, newReferenceModel(cfg))
+				for epoch := -int64(1)<<bits - 30; epoch <= -int64(1)<<bits+30; epoch += 3 {
+					low.store(epoch, testKeys[int(epoch&3)])
+					low.get(epoch, testKeys[0])
+				}
+				high := newExactHarness(t, cfg, newReferenceModel(cfg))
+				for epoch := int64(1)<<bits - 30; epoch <= int64(1)<<bits+30; epoch += 3 {
+					high.store(epoch, testKeys[int(epoch&3)])
+					high.get(epoch, testKeys[0])
+				}
+				high.requireFinalCounts()
+			})
+		}
+	})
 }
 
 // TestInt64ExtremeEpochs feeds the most extreme epochs in every unit to a fresh
@@ -52,24 +55,27 @@ func TestInt64ExtremeEpochs(t *testing.T) {
 		"nanos":   slidingcache.EpochInNanos,
 	}
 	epochs := []int64{math.MinInt64, math.MinInt64 + 1, math.MinInt64 + 9, math.MaxInt64 - 1, math.MaxInt64}
-	for rangeName, cfg := range rangeConfigs() {
-		for unitName, unit := range units {
-			cfg.EpochUnit = unit
-			for _, epoch := range epochs {
-				t.Run(rangeName+"/"+unitName+"/"+strconv.FormatInt(epoch, 10), func(t *testing.T) {
-					model := newReferenceModel(cfg)
-					h := newExactHarness(t, cfg, model)
-					got := h.store(epoch, testKeys[0])
-					if _, representable := model.bucket(epoch); !representable {
-						if _, ok := h.sketch.HighWater(); got != slidingcache.LateEvent || ok {
-							t.Fatalf("Store(%d) = %d with HW observed %t, want -1 and HW untouched", epoch, got, ok)
+	forEachShardCount(t, func(t *testing.T, shards int) {
+		for rangeName, cfg := range rangeConfigs() {
+			cfg.Shards = shards
+			for unitName, unit := range units {
+				cfg.EpochUnit = unit
+				for _, epoch := range epochs {
+					t.Run(rangeName+"/"+unitName+"/"+strconv.FormatInt(epoch, 10), func(t *testing.T) {
+						model := newReferenceModel(cfg)
+						h := newExactHarness(t, cfg, model)
+						got := h.store(epoch, testKeys[0])
+						if _, representable := model.bucket(epoch); !representable {
+							if _, ok := h.sketch.HighWater(); got != slidingcache.LateEvent || ok {
+								t.Fatalf("Store(%d) = %d with HW observed %t, want -1 and HW untouched", epoch, got, ok)
+							}
 						}
-					}
-					h.get(epoch, testKeys[0])
-				})
+						h.get(epoch, testKeys[0])
+					})
+				}
 			}
 		}
-	}
+	})
 }
 
 // TestSecondsAtMinInt64OverflowsBucket pins the case TestInt64ExtremeEpochs

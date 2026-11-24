@@ -21,13 +21,13 @@ func mustSketch(t testing.TB, width, depth int) *Sketch {
 	return s
 }
 
-func mustAggregate(t testing.TB, width, depth int) *Aggregate {
+func mustRing(t testing.TB, width, depth, slots int) *Ring {
 	t.Helper()
-	a, err := NewAggregate(width, depth)
+	r, err := NewRing(width, depth, slots)
 	if err != nil {
-		t.Fatalf("NewAggregate(%d, %d): %v", width, depth, err)
+		t.Fatalf("NewRing(%d, %d, %d): %v", width, depth, slots, err)
 	}
-	return a
+	return r
 }
 
 // cellIndexes returns the flat index of h's cell in every row, through the same
@@ -40,17 +40,22 @@ func cellIndexes(h, width uint64, depth int) []uint64 {
 	return indexes
 }
 
-// assertAggregateIsSumOfSlots checks invariant I1 cell by cell: every aggregate
-// cell equals the sum of that cell over the live slots.
-func assertAggregateIsSumOfSlots(t testing.TB, a *Aggregate, live []*Sketch) {
+// assertAggregateIsSumOfSlots checks the ring's invariant cell by cell: every
+// aggregate cell equals the sum of that cell over the slots.
+func assertAggregateIsSumOfSlots(t testing.TB, r *Ring) {
 	t.Helper()
-	for j, got := range a.cells {
+	for j, got := range r.agg {
 		var want uint64
-		for _, slot := range live {
-			want += uint64(slot.cells[j])
+		for s := range r.slotCount {
+			want += uint64(r.slots[s*r.cellsPerSlot+j])
 		}
 		if got != want {
-			t.Fatalf("aggregate cell %d = %d, want sum of live slots %d", j, got, want)
+			t.Fatalf("aggregate cell %d = %d, want sum of slots %d", j, got, want)
 		}
 	}
+}
+
+// slotCell returns cell j of slot, for tests that plant or read one directly.
+func slotCell(r *Ring, slot int, j uint64) *uint32 {
+	return &r.slots[uint64(slot*r.cellsPerSlot)+j]
 }

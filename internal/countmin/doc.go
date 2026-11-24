@@ -1,7 +1,8 @@
-// Package countmin implements a count-min sketch and an Aggregate that keeps the
-// cell-wise sum of several sketches, which is what a sliding-window counter needs:
+// Package countmin implements a count-min sketch and a Ring of slot sketches
+// that keeps their cell-wise sum, which is what a sliding-window counter needs:
 // one sketch per time slot, and an aggregate that answers for the whole window
-// without visiting every slot.
+// without visiting every slot. A Ring stores all its slots in one flat array
+// allocated up front.
 //
 // A sketch is depth rows of width counters. Every item raises one counter per row
 // and its estimate is the smallest of those counters, so collisions can only
