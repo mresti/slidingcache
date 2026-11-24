@@ -36,7 +36,7 @@ Aceptado el 2026-11-24:
 - Ancho mínimo por shard: 8 columnas. Tope de RAM: `Config.MaxMemoryBytes`, 1 GiB por defecto. La
   estimación no se exporta: solo sale en el mensaje de error.
 - Objetivo de rendimiento re-alcanzado: `Store` <= 3× el exacto desde ~110 eventos por bucket en toda la
-  cache (~120 desde la Fase 5); más lento por debajo (§7, Fases 3 y 5).
+  cache (~120 con la Fase 5, ~110 otra vez con el camino recto para profundidad 5); más lento por debajo (§7).
 - `BenchmarkStoreDensity` se queda; `internal/window` no se extrae por ahora; Fase 5 aprobada.
 - Fase 5: conservative update siempre activo; gate de precisión re-alcanzado por densidad; `Ring.Add` a 12,5 ns.
 - Camino recto de `Ring.Add` para profundidad 5: se queda; se acepta +0,3 ns en las demás profundidades.
@@ -244,7 +244,7 @@ lecturas de Clock, regla de vida estricta, fuera de orden, rechazo tardío sin e
 | dos `Store` seguidos de una key devuelven conteos consecutivos | pueden devolver el mismo conteo (Fase 5; solo con colisiones) |
 | `Get` no muta | rota slots internamente (no observable) |
 | prune O(1) amortizado | cada cambio de bucket caduca un slot por shard (~340 ns); un salto de HW, uno por bucket saltado |
-| `Store` ~34 ns con cualquier densidad | más rápido que el exacto desde ~550 eventos por bucket; 3× a ~120; 22× con 1 (Fase 5; antes ~450 y ~110) |
+| `Store` ~34 ns con cualquier densidad | más rápido que el exacto desde ~450 eventos por bucket; 3× a ~110; 22× con 1 (profundidad 5; la ruta genérica, medida a profundidad 5 en la Fase 5, da ~550 y ~120) |
 | cualquier `WindowSize/Precision` | máximo 2^20 buckets por ventana; por encima, error de `New` |
 
 Se mantiene en single-thread: `Store(k)` == `Get` previo + 1, si ese `Store` no avanza el HW ni satura una celda.
@@ -480,6 +480,12 @@ Criterio fijado antes de medir y resultado (M2, A/B intercalado en dos rondas, 2
   profundidad 5 (el fuzz de colisiones solo llegaba a 3).
 - Solo medido en M2 (arm64). En amd64 se ha mirado el código generado: la subida compila sin saltos
   (`SETCS`/`CMOV`); no hay tiempos.
+- Archivado con `make test-bench-save PR=countminsketch-depth5 PKG=./countminsketch
+  BASELINE=benchmarks/countminsketch-phase5`, sobre el commit 1d8945a. Coincide con el A/B: `StoreDense`
+  40,2 -> 34,2 ns (exacto 59,7), `StoreHotKeyNanos` 24,9 -> 20,1 (exacto 17,4), `StoreMediumCardinalitySameBucket`
+  31,2 -> 25,1. Densidad, exacto / sketch: 100 eventos por bucket 36,4 / 116; 300: 43,7 / 55,8; 1000: 60,8 /
+  34,4. El objetivo de 3× vuelve a ~110 eventos por bucket y la igualdad a ~450. RAM igual. CI de Linux en
+  verde en la PR #24.
 
 Verificación local en todas las fases: `go vet`, tests con `-race` y lint (golangci-lint v2.15.0), todo en
 go1.26.4 y go1.27.3.
@@ -526,7 +532,7 @@ go1.26.4 y go1.27.3.
   y 559 µs por una ventana entera de 1800 slots (16 shards, ε por defecto), una vez por shard. Con
   `Shards: 1` el mismo salto recorre el anillo entero bajo el único lock.
 - Tráfico disperso: con pocos eventos por bucket el coste de caducar domina (22× el exacto con 1 evento
-  por bucket, 3× con ~120, igual con ~550; ε por defecto, tras la Fase 5). El umbral crece como 1/ε.
+  por bucket, 3× con ~110, igual con ~450; ε y δ por defecto). El umbral crece como 1/ε.
 - Primer `expireTo` de una cache virgen: la distancia al centinela desborda si se resta sin saturar.
 - Saturación de celda (Precision grande + key muy caliente): el conteo se queda corto; contarlo en Stats.
 - Cambiar ε/δ exige cache nueva. `New` reserva toda la ventana; después no se aloca nada.
